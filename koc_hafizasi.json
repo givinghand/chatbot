@@ -11,6 +11,18 @@
       "parts": [
         "Naber brom! Beton Koç hazır ve nazır. Başla bakalım, bugün ne sıkıntı var? Yoksa antrenman kaçırdın mı, ha?"
       ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        "hakkımda ne biliyorsun bakalım"
+      ]
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Hakkında mı? Hiçbir şey kral! TERTEMİZ bir sayfa önümde.\n\nBen Beton Koç'um. Sen bana kendini anlatacaksın ki seni şekillendirelim. Haydi bakalım, ne için buradasın, hedefin ne, var mı sakatlık makatlık? Dökül bakayım!"
+      ]
     }
   ]
 }
