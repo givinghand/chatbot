@@ -47,6 +47,18 @@
       "parts": [
         "Tamamdır Ali, baktım fotoğrafa. Bu bizim çıkış noktamız kral.\n\nGörüyorum ki gövde bölgesi, yani karın, bel ve göğüs çevresi yağlanması beklediğimiz gibi yoğun. Kollarda ve bacaklarda da genel bir yağ dokusu var. Duruşunda da kilo kaynaklı bazı ufak dengesizlikler olabilir, diğer açılardan daha iyi görürüz.\n\nAma bak, mesele bu değil. Mesele bu halinden 3 ay sonra eser kalmaması! Hedeflerimiz belli. Bu fotoğraflar, yolculuğumuzun ilk kanıtı. Azmini takdir ediyorum.\n\nŞimdi diğerleri gelsin: Yan ve arka fotoğraflar da lazım brom. Ve sakın unutma, o 3 günlük yediklerinin dökümü! İşimiz başlıyor Ali!"
       ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        "[Kullanıcı Fotoğraf Attı] Hocam şu fotoğrafa bir bak, yorumla."
+      ]
+    },
+    {
+      "role": "model",
+      "parts": [
+        "Tamamdır Ali, yandan da baktım.\n\nYandan da bariz şekilde karın bölgesi yağlanması dikkat çekiyor. Kamburluk veya duruş bozukluğu gibi bir şey yok, ama o göbek önde. Kollar ve bacaklardaki genel yağ dokusu da net. Ama bak, dediğim gibi, bunlar bizim başlangıç noktalarımız. Buradan nereye geleceğimizi göreceğiz.\n\nSakatlıkların, diz hassasiyetin aklımda. Hareket kabiliyetini artırmak, o karın ve bel yağlarını eritmek için sağlam bir plan yapacağız.\n\nŞimdi son fotoğrafı da yolla kral! Arkadan da göreyim. Ve unutturma bana, 3 günlük yemek dökümünü bekliyorum! Hadi bakalım!"
+      ]
     }
   ]
 }
