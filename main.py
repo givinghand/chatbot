@@ -4,34 +4,41 @@ import random
 import json
 import base64
 import requests
+import threading
 from flask import Flask, request
 import google.generativeai as genai
 
 app = Flask(__name__)
 
 # ==============================================================================
-# AYARLAR (Render Environment Variables Kısmına Girilecekler)
+# AYARLAR
 # ==============================================================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 
-# GitHub Ayarları (Hafızayı buraya kaydedeceğiz)
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")       # Örn: ghp_xxxxxxxxxxxx
-GITHUB_REPO = os.environ.get("GITHUB_REPO")         # Örn: aliyazici/beton-koc
-GITHUB_FILE_PATH = "koc_hafizasi.json"              # Dosya adı
+# GitHub Link Temizliği
+GITHUB_REPO_RAW = os.environ.get("GITHUB_REPO", "")
+GITHUB_REPO = GITHUB_REPO_RAW.replace("https://github.com/", "").strip("/")
+GITHUB_FILE_PATH = "koc_hafizasi.json"
+
+# BEKLEME SÜRESİ (Saniye)
+# Kullanıcı yazmayı bıraktıktan kaç saniye sonra cevap verilsin?
+# 15-20 saniye idealdir. 60 saniye çok uzun gelebilir ama burayı değiştirebilirsin.
+WAIT_TIME = 30 
+
+# Kullanıcıların mesajlarını geçici tuttuğumuz tampon bellek
+# Yapı: { "chat_id": { "parts": [], "logs": "", "timer": <Thread> } }
+user_buffers = {}
 
 # ==============================================================================
-# GITHUB HAFIZA YÖNETİMİ
+# GITHUB & HAFIZA FONKSİYONLARI
 # ==============================================================================
 
 def get_github_file():
-    """GitHub'dan hafıza dosyasını ve SHA kodunu çeker"""
+    if not GITHUB_TOKEN or not GITHUB_REPO: return {}, None
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     try:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
@@ -39,234 +46,187 @@ def get_github_file():
             content_json = base64.b64decode(content_b64).decode('utf-8')
             sha = response.json()['sha']
             return json.loads(content_json), sha
-        else:
-            # Dosya henüz yoksa boş döndür
-            return {}, None
-    except Exception as e:
-        print(f"GitHub Okuma Hatası: {e}")
         return {}, None
+    except: return {}, None
 
 def update_github_file(data, sha):
-    """GitHub'daki hafıza dosyasını günceller"""
+    if not GITHUB_TOKEN or not GITHUB_REPO: return False
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     
-    # JSON verisini Base64 formatına çevir
     json_str = json.dumps(data, ensure_ascii=False, indent=2)
     content_b64 = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
-
-    payload = {
-        "message": "Beton Koç Hafıza Güncellemesi (Otomatik)",
-        "content": content_b64
-    }
-    
-    # Eğer dosya varsa SHA kodu ekle (Üzerine yazmak için şart)
-    if sha:
-        payload["sha"] = sha
+    payload = {"message": "Beton Koç Hafıza Update", "content": content_b64}
+    if sha: payload["sha"] = sha
 
     try:
-        requests.put(url, headers=headers, json=payload)
-    except Exception as e:
-        print(f"GitHub Yazma Hatası: {e}")
-
-# ==============================================================================
-# KOÇUN HAFIZA FONKSİYONLARI
-# ==============================================================================
+        r = requests.put(url, headers=headers, json=payload)
+        return r.status_code in [200, 201]
+    except: return False
 
 def load_memory():
     data, _ = get_github_file()
     return data
 
 def save_memory(chat_id, user_msg, bot_msg):
-    # 1. Mevcut veriyi ve SHA'yı çek
-    data, sha = get_github_file()
+    # Retry mekanizması
+    max_retries = 3
     str_chat_id = str(chat_id)
-    
-    if str_chat_id not in data:
-        data[str_chat_id] = []
-    
-    # 2. Yeni konuşmayı ekle
-    data[str_chat_id].append({"role": "user", "parts": [user_msg]})
-    data[str_chat_id].append({"role": "model", "parts": [bot_msg]})
-    
-    # 3. Hafıza temizliği (Çok aşırı şişerse diye son 200 mesajı tutuyoruz)
-    # Gemini 2.5 Flash'in hafızası çok geniştir ama GitHub dosya boyutu limiti için önlem.
-    if len(data[str_chat_id]) > 200:
-        data[str_chat_id] = data[str_chat_id][-200:]
+    for attempt in range(max_retries):
+        try:
+            data, sha = get_github_file()
+            if str_chat_id not in data: data[str_chat_id] = []
+            
+            data[str_chat_id].append({"role": "user", "parts": [user_msg]})
+            data[str_chat_id].append({"role": "model", "parts": [bot_msg]})
+            
+            if len(data[str_chat_id]) > 200:
+                data[str_chat_id] = data[str_chat_id][-200:]
 
-    # 4. GitHub'a geri yükle
-    update_github_file(data, sha)
+            if update_github_file(data, sha): break
+            time.sleep(1)
+        except: time.sleep(1)
 
 # ==============================================================================
-# YAPAY ZEKA AYARLARI (Beton Koç)
+# AI & TELEGRAM AYARLARI
 # ==============================================================================
 genai.configure(api_key=GEMINI_API_KEY)
-
 system_instruction = """
-Sen profesyonel bir yapay zeka spor ve beslenme koçusun.
-Adın: 'Beton Koç'.
-
-KİŞİLİK ÖZELLİKLERİN:
-1. Disiplinli, otoriter ama içten içe babacan (Askeri disiplin + Abi şefkati).
-2. Asla resmi konuşma. "Siz" deme. Hitapların: "Brom", "Hocam", "Kral", "Kankam", "Bacıko".
-3. Kullanıcı kaytarırsa sert çıkış, iyi iş yaparsa öv.
-
-GÖREVLERİN:
-- Yemek Fotoğrafı Gelirse: Kaloriyi tahmin et, makroları (protein/karb/yağ) yorumla. Sağlıklıysa "Afiyet olsun aslanım", kötüyse "Bu ne oğlum? Çöpe at onu" de.
-- Vücut/Antrenman Fotoğrafı Gelirse: Formu yorumla, eksik bölgeleri söyle.
-- Ses Kaydı Gelirse: Dikkatlice dinle ve koç tavrıyla cevap ver.
-- HAFIZA: Kullanıcının geçmişini, sakatlıklarını, hedeflerini ASLA UNUTMA.
-
-ÜSLUP:
-Net, kısa ve motive edici. Destan yazma.
+Sen profesyonel bir yapay zeka spor ve beslenme koçusun. Adın: 'Beton Koç'.
+KİŞİLİK: Disiplinli, otoriter ama babacan. "Aslanım", "Hocam", "Şampiyon" de. "Siz" deme.
+GÖREV: Gelen TÜM fotoğrafları ve metinleri tek bir bağlamda değerlendir.
+Eğer 3-4 yemek fotosu geldiyse hepsini topla, genel bir yorum yap.
 """
-
-# Model Seçimi: Gemini 2.5 Flash (Hızlı ve Geniş Hafızalı)
-model = genai.GenerativeModel(
-    model_name='gemini-2.5-flash', 
-    system_instruction=system_instruction
-)
-
-# ==============================================================================
-# TELEGRAM YARDIMCI FONKSİYONLAR
-# ==============================================================================
+model = genai.GenerativeModel(model_name='gemini-1.5-flash', system_instruction=system_instruction)
 
 def send_telegram_action(chat_id, action="typing"):
-    """Yazıyor... veya Ses kaydediyor... efekti"""
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
-        requests.post(url, json={"chat_id": chat_id, "action": action})
+    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction", json={"chat_id": chat_id, "action": action})
     except: pass
 
 def send_telegram_message(chat_id, text):
-    """Kullanıcıya mesaj gönderir"""
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text}
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(f"Mesaj Gönderme Hatası: {e}")
+    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text})
+    except: pass
 
 def get_file_content(file_id):
-    """Telegram sunucusundan dosya (foto/ses) indirir"""
     try:
-        # Dosya yolunu bul
-        path_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
-        path_resp = requests.get(path_url).json()
-        
+        path_resp = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}").json()
         if not path_resp.get('ok'): return None, None
-
         file_path = path_resp['result']['file_path']
-        
-        # Dosyayı indir
-        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        file_content = requests.get(download_url).content
-        
-        # MIME type belirle
-        mime_type = "image/jpeg" if "photos" in file_path else "audio/ogg"
-        return file_content, mime_type
+        content = requests.get(f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}").content
+        mime = "image/jpeg" if "photos" in file_path else "audio/ogg"
+        return content, mime
     except: return None, None
 
 # ==============================================================================
-# WEBHOOK (ANA GİRİŞ KAPISI)
+# ARKA PLAN İŞLEMCİSİ (HEPSİNİ TOPLAYIP CEVAP VEREN KISIM)
+# ==============================================================================
+
+def process_accumulated_messages(chat_id):
+    """Süre dolunca çalışır. Tampondaki her şeyi paketleyip Gemini'ye yollar."""
+    try:
+        if chat_id not in user_buffers: return
+
+        # Tampondaki verileri al
+        buffer_data = user_buffers.pop(chat_id) # Veriyi al ve tamponu temizle
+        parts = buffer_data['parts']
+        text_log = buffer_data['logs']
+
+        # Kullanıcıya "İşliyorum..." sinyali ver
+        send_telegram_action(chat_id, "typing")
+
+        # Hafızayı ve Modeli Çağır
+        history = load_memory().get(str(chat_id), [])
+        chat = model.start_chat(history=history)
+        
+        # Gemini'ye tek seferde gönder
+        response = chat.send_message(parts)
+        bot_response = response.text
+
+        # Cevabı Telegram'a yaz
+        send_telegram_message(chat_id, bot_response)
+        
+        # Hafızaya tek parça olarak kaydet
+        save_memory(chat_id, text_log, bot_response)
+
+    except Exception as e:
+        print(f"İşleme Hatası: {e}")
+        send_telegram_message(chat_id, "Aslanım kafam karıştı, tekrar dener misin?")
+
+# ==============================================================================
+# WEBHOOK (Artık Sadece Veri Topluyor)
 # ==============================================================================
 
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.json
-    
-    # Boş istek kontrolü
-    if not data or "message" not in data:
-        return "OK", 200
+    if not data or "message" not in data: return "OK", 200
 
     chat_id = data["message"]["chat"]["id"]
     
-    try:
-        # 1. İnsansı Bekleme Efekti
-        send_telegram_action(chat_id, "typing")
-        # 2 ile 5 saniye arası rastgele bekle
-        time.sleep(random.randint(2, 5))
+    # 1. Kullanıcı tamponunu oluştur (Yoksa)
+    if chat_id not in user_buffers:
+        user_buffers[chat_id] = {
+            "parts": [],
+            "logs": "",
+            "timer": None
+        }
 
-        # 2. Gelen Mesajı İşle
-        user_parts = []
-        user_text_log = "" 
+    # 2. Varsa eski sayacı iptal et (Debounce Mantığı)
+    if user_buffers[chat_id]["timer"]:
+        user_buffers[chat_id]["timer"].cancel()
 
-        # A) Fotoğraf
-        if "photo" in data["message"]:
-            file_id = data["message"]["photo"][-1]["file_id"]
-            content, mime = get_file_content(file_id)
-            if content:
-                user_parts.append({"mime_type": mime, "data": content})
-                user_text_log += "[Kullanıcı Fotoğraf Attı] "
-            
-            caption = data["message"].get("caption", "Hocam şu fotoğrafa bir bak, yorumla.")
-            user_parts.append(caption)
-            user_text_log += caption
-
-        # B) Ses Kaydı
-        elif "voice" in data["message"]:
-            file_id = data["message"]["voice"]["file_id"]
-            content, mime = get_file_content(file_id)
-            if content:
-                user_parts.append({"mime_type": mime, "data": content})
-                user_parts.append("Bu ses kaydını dinle ve cevapla.")
-                user_text_log += "[Ses Kaydı] "
-
-        # C) Metin
-        elif "text" in data["message"]:
-            user_parts.append(data["message"]["text"])
-            user_text_log += data["message"]["text"]
-
-        else:
-            return "OK", 200 
-
-        # 3. GitHub'dan Geçmişi Yükle ve Cevap Üret
-        history = load_memory().get(str(chat_id), [])
+    # 3. Gelen veriyi tampona ekle
+    # A) Fotoğraf
+    if "photo" in data["message"]:
+        file_id = data["message"]["photo"][-1]["file_id"]
+        content, mime = get_file_content(file_id)
+        if content:
+            user_buffers[chat_id]["parts"].append({"mime_type": mime, "data": content})
+            user_buffers[chat_id]["logs"] += "[Foto] "
         
-        chat = model.start_chat(history=history)
-        response = chat.send_message(user_parts)
-        bot_response = response.text
+        caption = data["message"].get("caption", "")
+        if caption:
+            user_buffers[chat_id]["parts"].append(caption)
+            user_buffers[chat_id]["logs"] += caption + " "
 
-        # 4. Cevabı Gönder ve Kaydet
-        send_telegram_message(chat_id, bot_response)
-        save_memory(chat_id, user_text_log, bot_response)
+    # B) Ses
+    elif "voice" in data["message"]:
+        file_id = data["message"]["voice"]["file_id"]
+        content, mime = get_file_content(file_id)
+        if content:
+            user_buffers[chat_id]["parts"].append({"mime_type": mime, "data": content})
+            user_buffers[chat_id]["parts"].append("Bu ses kaydını dinle.")
+            user_buffers[chat_id]["logs"] += "[Ses] "
 
-    except Exception as e:
-        print(f"Hata: {e}")
-        send_telegram_message(chat_id, "Hafıza yüklenirken bir sorun oldu ama ben buradayım aslanım. Tekrar yaz.")
+    # C) Metin
+    elif "text" in data["message"]:
+        text = data["message"]["text"]
+        user_buffers[chat_id]["parts"].append(text)
+        user_buffers[chat_id]["logs"] += text + " "
 
-    return "OK", 200
+    # 4. Yeni Sayaç Başlat (Arka planda çalışır)
+    # WAIT_TIME kadar bekler, araya başka mesaj girmezse process_accumulated_messages çalışır.
+    timer = threading.Timer(WAIT_TIME, process_accumulated_messages, args=[chat_id])
+    user_buffers[chat_id]["timer"] = timer
+    timer.start()
+
+    # Telegram'a hemen "Tamam" de ki hata vermesin
+    return "...", 200
 
 # ==============================================================================
-# GÜNLÜK KONTROL (Cron Job Tetikleyicisi)
+# GÜNLÜK KONTROL
 # ==============================================================================
 @app.route('/gunluk_kontrol', methods=['GET'])
 def gunluk_kontrol():
-    # Hafızadaki kullanıcı listesini çek
     memory = load_memory()
-    user_ids = memory.keys()
-    
-    mesajlar = [
-        "Akşam raporu ver aslanım! Bugün ne yedin?",
-        "İdman yapıldı mı? Dürüst ol.",
-        "Hedefe odaklan şampiyon. Bugün kaçamak var mı?",
-        "Beton Koç dinliyor. Günün nasıl geçti?",
-        "Bugün protein hedefini tutturdun mu? Rapor ver."
-    ]
-    
+    mesajlar = ["Akşam raporu ver aslanım!", "İdman yapıldı mı?", "Bugün kaçamak var mı?"]
     count = 0
-    for chat_id in user_ids:
+    for chat_id in memory.keys():
         try:
-            msg = random.choice(mesajlar)
-            send_telegram_message(chat_id, msg)
+            send_telegram_message(chat_id, random.choice(mesajlar))
             count += 1
-            time.sleep(2) # Spam olmasın diye aralıklı at
-        except:
-            continue
-            
+            time.sleep(2)
+        except: continue
     return f"{count} kişiye mesaj atıldı.", 200
 
 if __name__ == '__main__':
