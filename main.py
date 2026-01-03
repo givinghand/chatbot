@@ -37,8 +37,10 @@ def save_memory(chat_id, user_msg, bot_msg):
     data[str_chat_id].append({"role": "user", "parts": [user_msg]})
     data[str_chat_id].append({"role": "model", "parts": [bot_msg]})
     
-    # Son 30 mesajı hafızada tut
-    data[str_chat_id] = data[str_chat_id][-30:]
+    # --- DEĞİŞİKLİK BURADA ---
+    # Eskiden burada hafızayı siliyorduk ([-30:]).
+    # Artık silmiyoruz. Gemini 2.5 Flash her şeyi aklında tutabilir.
+    # Sınırsız hafıza modu aktif.
     
     with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -55,11 +57,11 @@ Kişiliğin:
 - Asla "Siz" diye konuşma, "Sen" diye konuş.
 - Kullanıcı yemek fotoğrafı atarsa: Kalorisi, besin değeri hakkında yorum yap. Sağlıksızsa fırçayı bas.
 - Kullanıcı antrenman/vücut fotosu atarsa: Formunu yorumla, eksiklerini söyle.
-- Hafızan var: Geçmiş konuşmaları hatırla. Dün "bacak çalıştım" dediyse bugün bacak durumunu sor.
+- KESİN KURAL: Hafızan çok güçlü. Kullanıcının sana aylar önce söylediği sakatlıkları, sevmediği yemekleri asla unutma.
 - Cevapların net ve kısa olsun.
 """
 
-# DİKKAT: Gemini 2.5 Flash Modeli Aktif Edildi
+# Güçlü ve Geniş Hafızalı Model: 2.5 Flash
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash', 
     system_instruction=system_instruction
@@ -68,7 +70,6 @@ model = genai.GenerativeModel(
 # --- YARDIMCI FONKSİYONLAR ---
 
 def send_telegram_action(chat_id, action="typing"):
-    """Yazıyor... efekti"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
         requests.post(url, json={"chat_id": chat_id, "action": action})
@@ -76,7 +77,6 @@ def send_telegram_action(chat_id, action="typing"):
         pass
 
 def send_telegram_message(chat_id, text):
-    """Mesaj gönderir"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": chat_id, "text": text}
@@ -85,7 +85,6 @@ def send_telegram_message(chat_id, text):
         print(f"Mesaj gönderme hatası: {e}")
 
 def get_file_content(file_id):
-    """Telegram'dan Fotoğraf veya Ses indirir"""
     try:
         path_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
         path_resp = requests.get(path_url).json()
@@ -114,37 +113,32 @@ def webhook():
     chat_id = data["message"]["chat"]["id"]
     
     try:
-        # 1. BOT BEKLEME EFEKTİ (Daha doğal durması için)
+        # 1. Bekleme Efekti
         send_telegram_action(chat_id, "typing")
-        # 2.5 Flash çok hızlıdır, cevap hemen dönmesin diye 3-6 saniye bekletiyoruz
-        time.sleep(random.randint(3, 6))
+        time.sleep(random.randint(2, 5))
 
-        # 2. İÇERİĞİ AL
+        # 2. İçeriği Al
         user_parts = []
         user_text_log = "" 
 
-        # A) Fotoğraf
         if "photo" in data["message"]:
             file_id = data["message"]["photo"][-1]["file_id"]
             content, mime = get_file_content(file_id)
             if content:
                 user_parts.append({"mime_type": mime, "data": content})
                 user_text_log += "[Kullanıcı Fotoğraf Attı] "
-            
-            caption = data["message"].get("caption", "Hocam şu fotoğrafa bir bak, yorumla.")
+            caption = data["message"].get("caption", "Hocam fotoğrafa bak.")
             user_parts.append(caption)
             user_text_log += caption
 
-        # B) Ses
         elif "voice" in data["message"]:
             file_id = data["message"]["voice"]["file_id"]
             content, mime = get_file_content(file_id)
             if content:
                 user_parts.append({"mime_type": mime, "data": content})
-                user_parts.append("Bu ses kaydını dinle. Koç tavrıyla cevap ver.")
+                user_parts.append("Bu ses kaydını dinle.")
                 user_text_log += "[Ses Kaydı] "
 
-        # C) Metin
         elif "text" in data["message"]:
             user_parts.append(data["message"]["text"])
             user_text_log += data["message"]["text"]
@@ -152,7 +146,7 @@ def webhook():
         else:
             return "OK", 200 
 
-        # 3. HAFIZA & CEVAP
+        # 3. TÜM HAFIZAYI ÇAĞIR
         history = load_memory().get(str(chat_id), [])
         
         chat = model.start_chat(history=history)
@@ -165,8 +159,7 @@ def webhook():
 
     except Exception as e:
         print(f"Hata: {e}")
-        # Hata olursa yine koç ağzıyla cevap verelim
-        send_telegram_message(chat_id, "Aslanım salonda internet çekmiyor galiba, tam duyamadım. Tekrar yazsana.")
+        send_telegram_message(chat_id, "Bağlantı koptu aslanım, tekrar yaz.")
 
     return "OK", 200
 
@@ -177,10 +170,10 @@ def gunluk_kontrol():
     user_ids = memory.keys()
     
     mesajlar = [
-        "Akşam oldu aslanım! Bugün kaçamak yaptın mı? Dürüst ol.",
-        "İdman bitti mi şampiyon? Yoksa yatışta mısın?",
-        "Beton Koç kontrol saati! Bugün ne yedin ne içtin? Rapor ver.",
-        "Hedefe ne kadar kaldı? Bugün yaptıklarını anlat bakalım."
+        "Akşam raporu ver aslanım! Bugün ne yedin?",
+        "İdman yapıldı mı? Dürüst ol.",
+        "Hedefe odaklan şampiyon. Bugün kaçamak var mı?",
+        "Beton Koç dinliyor. Günün nasıl geçti?"
     ]
     
     count = 0
