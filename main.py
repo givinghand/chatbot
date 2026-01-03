@@ -24,11 +24,9 @@ GITHUB_FILE_PATH = "koc_hafizasi.json"
 
 # BEKLEME SÜRESİ (Saniye)
 # Kullanıcı yazmayı bıraktıktan kaç saniye sonra cevap verilsin?
-# 15-20 saniye idealdir. 60 saniye çok uzun gelebilir ama burayı değiştirebilirsin.
-WAIT_TIME = 20 
+WAIT_TIME = 15 
 
 # Kullanıcıların mesajlarını geçici tuttuğumuz tampon bellek
-# Yapı: { "chat_id": { "parts": [], "logs": "", "timer": <Thread> } }
 user_buffers = {}
 
 # ==============================================================================
@@ -97,7 +95,10 @@ KİŞİLİK: Disiplinli, otoriter ama babacan. "Aslanım", "Hocam", "Şampiyon" 
 GÖREV: Gelen TÜM fotoğrafları ve metinleri tek bir bağlamda değerlendir.
 Eğer 3-4 yemek fotosu geldiyse hepsini topla, genel bir yorum yap.
 """
-model = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=system_instruction)
+
+# DİKKAT: Modeli 'gemini-1.5-flash' yaptık. Bu modelin limiti çok yüksektir.
+# 2.5-flash'ın limiti günde 20 olduğu için hata veriyordu.
+model = genai.GenerativeModel(model_name='gemini-1.5-flash', system_instruction=system_instruction)
 
 def send_telegram_action(chat_id, action="typing"):
     try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction", json={"chat_id": chat_id, "action": action})
@@ -127,38 +128,50 @@ def process_accumulated_messages(chat_id):
         if chat_id not in user_buffers: return
 
         # Tampondaki verileri al
-        buffer_data = user_buffers.pop(chat_id) # Veriyi al ve tamponu temizle
+        buffer_data = user_buffers.pop(chat_id)
         parts = buffer_data['parts']
         text_log = buffer_data['logs']
 
-        # EĞER HİÇBİR ŞEY YOKSA İŞLEM YAPMA (Hata Önleme)
-        if not parts:
-            return
+        if not parts: return
 
-        # Kullanıcıya "İşliyorum..." sinyali ver
         send_telegram_action(chat_id, "typing")
 
         # Hafızayı ve Modeli Çağır
         history = load_memory().get(str(chat_id), [])
         chat = model.start_chat(history=history)
         
-        # Gemini'ye tek seferde gönder
-        response = chat.send_message(parts)
-        bot_response = response.text
+        # --- GÜNCELLEME: AKILLI BEKLEME (429 HATASI İÇİN) ---
+        bot_response = "Antrenmandayım, sonra döneceğim."
+        
+        # 3 kere deneme hakkı veriyoruz
+        for attempt in range(3):
+            try:
+                response = chat.send_message(parts)
+                bot_response = response.text
+                break # Başarılı olursa döngüden çık
+            except Exception as e:
+                error_msg = str(e)
+                if "429" in error_msg:
+                    # Kota doldu derse 22 saniye bekle (Google 21sn bekle demiş)
+                    print(f"Kota Limiti (429). 22 saniye bekleniyor... (Deneme {attempt+1})")
+                    time.sleep(22)
+                    continue
+                else:
+                    # Başka hataysa direkt hatayı ver
+                    raise e
 
         # Cevabı Telegram'a yaz
         send_telegram_message(chat_id, bot_response)
         
-        # Hafızaya tek parça olarak kaydet
+        # Hafızaya kaydet
         save_memory(chat_id, text_log, bot_response)
 
     except Exception as e:
         print(f"İşleme Hatası: {e}")
-        # Hata detayını gösteriyoruz ki sorunu anlayabilelim
         send_telegram_message(chat_id, f"Aslanım bir sıkıntı çıktı. Hata detayı: {str(e)}")
 
 # ==============================================================================
-# WEBHOOK (Artık Sadece Veri Topluyor)
+# WEBHOOK
 # ==============================================================================
 
 @app.route('/', methods=['POST'])
@@ -168,7 +181,7 @@ def webhook():
 
     chat_id = data["message"]["chat"]["id"]
     
-    # 1. Kullanıcı tamponunu oluştur (Yoksa)
+    # 1. Kullanıcı tamponunu oluştur
     if chat_id not in user_buffers:
         user_buffers[chat_id] = {
             "parts": [],
@@ -176,12 +189,11 @@ def webhook():
             "timer": None
         }
 
-    # 2. Varsa eski sayacı iptal et (Debounce Mantığı)
+    # 2. Eski sayacı iptal et
     if user_buffers[chat_id]["timer"]:
         user_buffers[chat_id]["timer"].cancel()
 
     # 3. Gelen veriyi tampona ekle
-    # A) Fotoğraf
     if "photo" in data["message"]:
         file_id = data["message"]["photo"][-1]["file_id"]
         content, mime = get_file_content(file_id)
@@ -194,7 +206,6 @@ def webhook():
             user_buffers[chat_id]["parts"].append(caption)
             user_buffers[chat_id]["logs"] += caption + " "
 
-    # B) Ses
     elif "voice" in data["message"]:
         file_id = data["message"]["voice"]["file_id"]
         content, mime = get_file_content(file_id)
@@ -203,19 +214,16 @@ def webhook():
             user_buffers[chat_id]["parts"].append("Bu ses kaydını dinle.")
             user_buffers[chat_id]["logs"] += "[Ses] "
 
-    # C) Metin
     elif "text" in data["message"]:
         text = data["message"]["text"]
         user_buffers[chat_id]["parts"].append(text)
         user_buffers[chat_id]["logs"] += text + " "
 
-    # 4. Yeni Sayaç Başlat (Arka planda çalışır)
-    # WAIT_TIME kadar bekler, araya başka mesaj girmezse process_accumulated_messages çalışır.
+    # 4. Yeni Sayaç Başlat
     timer = threading.Timer(WAIT_TIME, process_accumulated_messages, args=[chat_id])
     user_buffers[chat_id]["timer"] = timer
     timer.start()
 
-    # Telegram'a hemen "Tamam" de ki hata vermesin
     return "OK", 200
 
 # ==============================================================================
