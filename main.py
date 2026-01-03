@@ -97,7 +97,7 @@ KİŞİLİK: Disiplinli, otoriter ama babacan. "Aslanım", "Hocam", "Şampiyon" 
 GÖREV: Gelen TÜM fotoğrafları ve metinleri tek bir bağlamda değerlendir.
 Eğer 3-4 yemek fotosu geldiyse hepsini topla, genel bir yorum yap.
 """
-model = genai.GenerativeModel(model_name='gemini-1.5-flash', system_instruction=system_instruction)
+model = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=system_instruction)
 
 def send_telegram_action(chat_id, action="typing"):
     try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction", json={"chat_id": chat_id, "action": action})
