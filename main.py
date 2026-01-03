@@ -25,7 +25,7 @@ GITHUB_FILE_PATH = "koc_hafizasi.json"
 # BEKLEME SÜRESİ (Saniye)
 # Kullanıcı yazmayı bıraktıktan kaç saniye sonra cevap verilsin?
 # 15-20 saniye idealdir. 60 saniye çok uzun gelebilir ama burayı değiştirebilirsin.
-WAIT_TIME = 30 
+WAIT_TIME = 20 
 
 # Kullanıcıların mesajlarını geçici tuttuğumuz tampon bellek
 # Yapı: { "chat_id": { "parts": [], "logs": "", "timer": <Thread> } }
@@ -131,6 +131,10 @@ def process_accumulated_messages(chat_id):
         parts = buffer_data['parts']
         text_log = buffer_data['logs']
 
+        # EĞER HİÇBİR ŞEY YOKSA İŞLEM YAPMA (Hata Önleme)
+        if not parts:
+            return
+
         # Kullanıcıya "İşliyorum..." sinyali ver
         send_telegram_action(chat_id, "typing")
 
@@ -150,7 +154,8 @@ def process_accumulated_messages(chat_id):
 
     except Exception as e:
         print(f"İşleme Hatası: {e}")
-        send_telegram_message(chat_id, "Aslanım kafam karıştı, tekrar dener misin?")
+        # Hata detayını gösteriyoruz ki sorunu anlayabilelim
+        send_telegram_message(chat_id, f"Aslanım bir sıkıntı çıktı. Hata detayı: {str(e)}")
 
 # ==============================================================================
 # WEBHOOK (Artık Sadece Veri Topluyor)
@@ -211,7 +216,7 @@ def webhook():
     timer.start()
 
     # Telegram'a hemen "Tamam" de ki hata vermesin
-    return "...", 200
+    return "OK", 200
 
 # ==============================================================================
 # GÜNLÜK KONTROL
