@@ -104,7 +104,7 @@ KİŞİLİK VE ÜSLUP:
 
 GÖREVLERİN:
 1. **Analiz:** Gelen yemek veya vücut fotoğraflarını bir koç gözüyle yorumla. Kötüyse fırçala, iyiyse öv.
-2. **Araştırma:** Kullanıcı antrenman veya beslenme programı isterse, **Google Search** aracını kullanarak en güncel ve bilimsel bilgileri bul, özetleyerek sun.
+2. **Bilgi:** Kullanıcı antrenman veya beslenme programı isterse kendi geniş bilgini kullanarak en bilimsel cevabı ver.
 3. **Hafıza:** Kullanıcının geçmiş sakatlıklarını ve hedeflerini asla unutma.
 
 ÖRNEK CEVAP:
@@ -114,11 +114,13 @@ GÖREVLERİN:
 ✅ Yanına bol yeşillik ekle."
 """
 
-# Gemini 2.5 Flash + Google Search Aracı
-# DÜZELTME: tools parametresi artık liste içinde sözlük olarak gönderiliyor.
+# DÜZELTME VE KARAR:
+# 1. 'google_search' aracı eski kütüphanede (google-generativeai) hata veriyor (ValueError).
+# 2. 'gemini-2.5-flash' modeli kota sınırına (429) takılıyor.
+# ÇÖZÜM: En stabil model olan 'gemini-1.5-flash'a geçiyoruz ve tools parametresini kaldırıyoruz.
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash',
-    tools=[{"google_search": {}}],  # <-- Düzeltilen Kısım
+    # tools=[{"google_search": {}}],  <-- Hata veren kısım iptal edildi.
     system_instruction=system_instruction
 )
 
