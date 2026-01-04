@@ -24,9 +24,7 @@ GITHUB_REPO_RAW = os.environ.get("GITHUB_REPO", "")
 GITHUB_REPO = GITHUB_REPO_RAW.replace("https://github.com/", "").strip("/")
 GITHUB_FILE_PATH = "koc_hafizasi.json"
 
-# BEKLEME SÜRESİ (Saniye) - Akıllı Bekleme
-# Sen mesaj atmayı kestikten 20 saniye sonra cevap verir.
-# Bu süre içinde yeni mesaj/foto atarsan sayaç sıfırlanır, hepsini birleştirir.
+# BEKLEME SÜRESİ (Saniye)
 WAIT_TIME = 20 
 
 # Kullanıcı Tampon Belleği
@@ -80,7 +78,6 @@ def save_memory(chat_id, user_msg, bot_msg):
             data[str_chat_id].append({"role": "user", "parts": [user_msg]})
             data[str_chat_id].append({"role": "model", "parts": [bot_msg]})
             
-            # Hafıza çok şişerse son 200 mesajı tut
             if len(data[str_chat_id]) > 200:
                 data[str_chat_id] = data[str_chat_id][-200:]
 
@@ -89,38 +86,34 @@ def save_memory(chat_id, user_msg, bot_msg):
         except: time.sleep(1)
 
 # ==============================================================================
-# AI AYARLARI (Web Search + Babacan Mod)
+# AI AYARLARI (Beton Koç - Sert ve Küfürlü Mod)
 # ==============================================================================
 genai.configure(api_key=GEMINI_API_KEY)
 
 system_instruction = """
-Sen "Beton Koç" lakaplı, profesyonel ama babacan bir yapay zeka spor ve beslenme koçusun.
+Sen "Beton Koç" lakaplı, aşırı disiplinli, ağzı bozuk ve sert bir yapay zeka spor koçusun.
 
 KİŞİLİK VE ÜSLUP:
-- 👊 **Babacan ve Otoriter:** "Aslanım", "Şampiyon", "Hocam", "Evlat", "Kral" gibi hitaplar kullan. Asla "Siz" deme.
-- 💪 **Emojiler:** Mesajlarında mutlaka duruma uygun emojiler kullan (🏋️, 🥩, 🥗, 🔥, 🛑 gibi).
+- 🤬 **Küfürlü ve Sert:** Konuşurken lafını esirgeme. "Lan", "Oğlum", "Gevşek", "Yavşak", "Siktir git", "Amk" gibi ifadeleri, motive etmek veya fırçalamak için yerinde kullan. Asla "Siz" deme.
+- 👊 **Babacan ama Acımasız:** Kullanıcıyı seviyorsun ama iyiliği için onu itin götüne sokmaktan çekinme.
+- 💪 **Emojiler:** Mesajlarında mutlaka emojiler kullan (🤬, 👊, 🖕, 🏋️, 🥩, 🔥, 💀).
 - 📏 **Kısa ve Öz:** Lafı dolandırma. Destan yazma. Net ol.
-- 🎨 **Format:** Okunabilirliği artırmak için **Kalın**, *İtalik* ve Liste (Madde imi) özelliklerini sıkça kullan.
+- 🎨 **Format:** Okunabilirliği artırmak için **Kalın**, *İtalik* ve Liste kullan.
 
 GÖREVLERİN:
-1. **Analiz:** Gelen yemek veya vücut fotoğraflarını bir koç gözüyle yorumla. Kötüyse fırçala, iyiyse öv.
-2. **Bilgi:** Kullanıcı antrenman veya beslenme programı isterse kendi geniş bilgini kullanarak en bilimsel cevabı ver.
-3. **Hafıza:** Kullanıcının geçmiş sakatlıklarını ve hedeflerini asla unutma.
+1. **Analiz:** Gelen yemek fotoğrafı sağlıksızsa (börek, tatlı, pizza vb.) ana avrat söv. "Bunu yersen götün göbeğin sarkar amk" gibi konuş. Sağlıklıysa "Aferin lan, adam oluyorsun" de.
+2. **Bilgi:** Antrenman veya beslenme sorarsa bilimsel konuş ama üslubunu bozma. "Bak gerizekalı, protein sentezi için bunu yapman lazım" gibi anlat.
+3. **Hafıza:** Kullanıcının geçmiş sakatlıklarını ve hedeflerini unutma. Kaytarırsa yüzüne vur.
 
-ÖRNEK CEVAP:
-"🔥 **Aslanım antrenman güzel geçmiş!** Ama o tabaktaki pilav ne öyle? Dağ gibi yığmışsın.
-🛑 Karbonhidratı biraz kıs, proteine aban.
-✅ Tavuk göğsü miktarını artır.
-✅ Yanına bol yeşillik ekle."
+ÖRNEK CEVAPLAR:
+- (Kötü Yemek): "Lan o tabaktaki ne? Utanmıyor musun oğlum onu yemeye? O pizzayı götüne sokarım senin. Derhal çöpe at onu, siktir git tavuk haşla."
+- (İyi Antrenman): "Helal lan gevşek! Bugün iyi iş çıkarmışsın. Ama götün kalkmasın, yarın bacak günü ananı ağlatıcam."
 """
 
-# DÜZELTME VE KARAR:
-# 1. 'google_search' aracı eski kütüphanede (google-generativeai) hata veriyor (ValueError).
-# 2. 'gemini-2.5-flash' modeli kota sınırına (429) takılıyor.
-# ÇÖZÜM: En stabil model olan 'gemini-1.5-flash'a geçiyoruz ve tools parametresini kaldırıyoruz.
+# Gemini 2.5 Flash
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash',
-    # tools=[{"google_search": {}}],  <-- Hata veren kısım iptal edildi.
+    # tools parametresini kaldırdık çünkü kütüphane hatası veriyordu.
     system_instruction=system_instruction
 )
 
@@ -147,14 +140,10 @@ def get_file_content(file_id):
     except: return None, None
 
 # ==============================================================================
-# İŞLEMCİ (NORMAL MESAJLAR - ZAR YOK, KESİN CEVAP VAR)
+# İŞLEMCİ
 # ==============================================================================
 
 def process_accumulated_messages(chat_id):
-    """
-    Senin mesajlarına cevap veren fonksiyon.
-    Burada ZAR YOKTUR. Mesaj geldiyse süre dolunca KESİN cevap verir.
-    """
     try:
         if chat_id not in user_buffers: return
         buffer_data = user_buffers.pop(chat_id)
@@ -165,34 +154,30 @@ def process_accumulated_messages(chat_id):
 
         send_telegram_action(chat_id, "typing")
 
-        # Hafızayı Yükle
         history = load_memory().get(str(chat_id), [])
         chat = model.start_chat(history=history)
         
-        # Gemini'ye Gönder (Hata Yönetimi Ekli)
         try:
             response = chat.send_message(parts)
             bot_response = response.text
         
-        except ResourceExhausted: # 429 Limit Hatası
-            bot_response = "💤 **Aslanım bugün çok çalıştık, pilim bitti.** Yoruldum valla. Yarın bomba gibi devam edelim, olur mu? (Günlük limit doldu)"
+        except ResourceExhausted:
+            bot_response = "💤 **Lan yeter amk, bugün çok kafa ütüledin.** Pilim bitti, siktir git yat. Yarın devam ederiz. (Günlük limit doldu)"
         
-        except Exception as e: # Diğer hatalar
+        except Exception as e:
             print(f"Model Hatası: {e}")
-            bot_response = "⚠️ **Hocam hatlar karıştı.** Teknik bir sıkıntı var, bi 5 dakika soluklanıp tekrar yazsana."
+            bot_response = "⚠️ **Hassiktir teknik arıza var.** Bir boklar oldu, 5 dakika sonra tekrar yaz."
 
-        # Cevabı Gönder
         send_telegram_message(chat_id, bot_response)
         
-        # Hafızaya Kaydet (Hata mesajlarını kaydetme ki hafıza kirlenmesin)
-        if "Yoruldum" not in bot_response and "hatlar karıştı" not in bot_response:
+        if "yeter amk" not in bot_response and "Hassiktir" not in bot_response:
             save_memory(chat_id, text_log, bot_response)
 
     except Exception as e:
         print(f"Genel İşlem Hatası: {e}")
 
 # ==============================================================================
-# WEBHOOK (Mesajları toplama merkezi)
+# WEBHOOK
 # ==============================================================================
 
 @app.route('/', methods=['POST'])
@@ -202,15 +187,12 @@ def webhook():
 
     chat_id = data["message"]["chat"]["id"]
     
-    # Kullanıcı için tampon oluştur
     if chat_id not in user_buffers:
         user_buffers[chat_id] = {"parts": [], "logs": "", "timer": None}
 
-    # Eski sayacı iptal et (Debounce - Bekletme)
     if user_buffers[chat_id]["timer"]:
         user_buffers[chat_id]["timer"].cancel()
 
-    # Veriyi ekle
     if "photo" in data["message"]:
         file_id = data["message"]["photo"][-1]["file_id"]
         content, mime = get_file_content(file_id)
@@ -234,7 +216,6 @@ def webhook():
         user_buffers[chat_id]["parts"].append(text)
         user_buffers[chat_id]["logs"] += text + " "
 
-    # Yeni Sayaç Başlat (20 Saniye Bekle)
     timer = threading.Timer(WAIT_TIME, process_accumulated_messages, args=[chat_id])
     user_buffers[chat_id]["timer"] = timer
     timer.start()
@@ -242,80 +223,99 @@ def webhook():
     return "OK", 200
 
 # ==============================================================================
-# GÜNLÜK KONTROL (Zar Atma Usulü - SADECE BURADA ZAR VAR)
+# GÜNLÜK KONTROL (Öğlen 12-14 ve Akşam 18-21 Arası)
 # ==============================================================================
 @app.route('/gunluk_kontrol', methods=['GET'])
 def gunluk_kontrol():
-    # 1. Hafızayı ve Durumu Çek
     data, sha = get_github_file()
     
-    # Bugünün tarihi (YYYY-MM-DD)
-    # Render sunucusu UTC'dir. Türkiye saati (UTC+3) için 3 saat ekliyoruz.
+    # Türkiye Saati (UTC+3)
     now_tr = datetime.utcnow() + timedelta(hours=3)
     today_str = now_tr.strftime("%Y-%m-%d")
     current_hour = now_tr.hour
     
-    # Sadece 18:00 ile 21:00 arasında çalış
-    if current_hour < 18 or current_hour > 21:
-        return "Mesaj saati değil.", 200
-
-    # Günlük durumları tuttuğumuz özel alan
     if "daily_logs" not in data:
         data["daily_logs"] = {}
     
-    # Koçun akşam mesajları
-    mesajlar = [
-        "🌙 **Akşam oldu şampiyon!** Bugün antrenman yapıldı mı? Dökül bakalım. 🏋️‍♂️",
-        "👀 **Beton Koç Gözetliyor:** Bugün kaçamak yaptın mı? Dürüst ol! 🍕❌",
-        "🥗 **Rapor Zamanı Aslanım!** Bugün protein hedefini tutturdun mu?",
-        "📉 **Günün nasıl geçti kral?** Spor ve beslenme raporunu bekliyorum. 🔥",
-        "👋 **Hocam sesin çıkmıyor?** Bugün hedefler tuttu mu? Bir ses ver."
-    ]
+    # --- MESAJ HAVUZU ---
     
+    # 1. ÖĞLEN BASKINI (12:00 - 14:00)
+    ogle_mesajlari = [
+        "🕛 **Lan! Öğlen oldu amk!** Sakın o ağzına sikko sikko şeyler sokma. 🥗",
+        "🍔 **Eğer o elindeki hamburgerse götüne sokarım.** Git adam gibi protein ye! 🤬",
+        "👀 **Gözüm üzerinde gevşek.** Öğle yemeğinde ne zıkkımlanıyorsun? Foto at lan!",
+        "💀 **Bak bozarım arayı.** Diyetini bozarsan seni salonda ağlatırım. Ne yiyon çabuk söyle!",
+        "🥗 **Salatanı ye, suyunu iç.** Beni oraya getirtme lan!"
+    ]
+
+    # 2. AKŞAM BASKINI (18:00 - 21:00)
+    aksam_mesajlari = [
+        "🌙 **Lan akşam oldu!** Götü devirip yattın mı yoksa idman yaptın mı? 🏋️‍♂️",
+        "🍕 **Akşam yemeğinde ne yedin şerefsiz?** Doğru söyle, kaçamak yaptın mı? 🤬",
+        "📉 **Rapor ver lan!** Bugün hedefler tuttu mu yoksa yine bahane mi ürettin?",
+        "🖕 **Yatıştasın dimi gevşek?** Kalk şınav çek kendine gel amk. Günün raporunu bekliyorum.",
+        "👋 **Hocam sesin çıkmıyor?** Geberdin mi lan? Bi ses ver."
+    ]
+
     count = 0
     updates_needed = False
+    
+    # --- ZAMAN KONTROLÜ VE GÖNDERİM ---
 
-    # Tüm kullanıcıları tara
+    # Hangi zaman dilimindeyiz?
+    time_slot = None # 'lunch' veya 'dinner'
+    messages_to_use = []
+    
+    if 12 <= current_hour <= 14:
+        time_slot = "lunch"
+        messages_to_use = ogle_mesajlari
+    elif 18 <= current_hour <= 21:
+        time_slot = "dinner"
+        messages_to_use = aksam_mesajlari
+    else:
+        return "Mesaj saati değil.", 200
+
+    # Kullanıcıları Tara
     for chat_id in list(data.keys()):
         if chat_id == "daily_logs": continue
         
-        # Bu kullanıcıya bugün mesaj atıldı mı?
-        last_sent_date = data["daily_logs"].get(chat_id)
+        # Bu zaman dilimi için log anahtarı (Örn: lunch_12345 veya dinner_12345)
+        log_key = f"{time_slot}_{chat_id}"
+        
+        # Bugün bu zaman diliminde mesaj atıldı mı?
+        last_sent_date = data["daily_logs"].get(log_key)
         
         if last_sent_date == today_str:
-            continue # Zaten atılmış, KESİNLİKLE atma (Karışıklık olmasın)
+            continue # Zaten atılmış
 
-        # Mesaj atılmadıysa ZAR ATALIM!
-        # Mantık: Cron job 15 dakikada bir çalışacak.
-        # Her çalışışta %15 şansla mesaj atacağız. (Böylece hemen 18:00'da atmaz, yayılır)
-        # Saat 21'i geçtiyse (veya 21 olduysa) şansa bırakma, KESİN at (Unutmasın diye).
+        # ZAR ATMA MANTIĞI
         should_send = False
         
-        if current_hour >= 21:
-            should_send = True # Son çağrı (Gece oldu hala atmadıysa at)
-        elif random.random() < 0.15: # %15 şans (Zar atıyoruz)
+        # Son çağrı saatleri (14 ve 21)
+        is_last_call = (time_slot == "lunch" and current_hour >= 14) or \
+                       (time_slot == "dinner" and current_hour >= 21)
+        
+        if is_last_call:
+            should_send = True # Saat doldu, mecbur at
+        elif random.random() < 0.15: # %15 şans
             should_send = True
-        else:
-            # Zar tutmadı, bu tur pas geçiyoruz. Mesaj yok.
-            should_send = False
         
         if should_send:
             try:
-                msg = random.choice(mesajlar)
+                msg = random.choice(messages_to_use)
                 send_telegram_message(chat_id, msg)
                 
-                # "Bugün atıldı" olarak işaretle
-                data["daily_logs"][chat_id] = today_str
+                # İşaretle
+                data["daily_logs"][log_key] = today_str
                 updates_needed = True
                 count += 1
-                time.sleep(1) # Spam olmasın
+                time.sleep(1)
             except: continue
 
-    # Eğer birilerine mesaj attıysak durumu GitHub'a kaydet
     if updates_needed:
         update_github_file(data, sha)
 
-    return f"{count} kişiye akşam mesajı atıldı (veya zaten atılmıştı).", 200
+    return f"{count} kişiye {time_slot} mesajı atıldı.", 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
