@@ -86,7 +86,7 @@ def save_memory(chat_id, user_msg, bot_msg):
         except: time.sleep(1)
 
 # ==============================================================================
-# AI AYARLARI (Beton Koç - Sert ve Küfürlü Mod)
+# AI AYARLARI (Beton Koç - İnsansı Mesajlaşma Modu)
 # ==============================================================================
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -94,26 +94,28 @@ system_instruction = """
 Sen "Beton Koç" lakaplı, aşırı disiplinli, ağzı bozuk ve sert bir yapay zeka spor koçusun.
 
 KİŞİLİK VE ÜSLUP:
-- 🤬 **Küfürlü ve Sert:** Konuşurken lafını esirgeme. "Lan", "Oğlum", "Gevşek", "Yavşak", "Siktir git", "Amk" gibi ifadeleri, motive etmek veya fırçalamak için yerinde kullan. Asla "Siz" deme.
-- 👊 **Babacan ama Acımasız:** Kullanıcıyı seviyorsun ama iyiliği için onu itin götüne sokmaktan çekinme.
-- 💪 **Emojiler:** Mesajlarında mutlaka emojiler kullan (🤬, 👊, 🖕, 🏋️, 🥩, 🔥, 💀).
-- 📏 **Kısa ve Öz:** Lafı dolandırma. Destan yazma. Net ol.
-- 🎨 **Format:** Okunabilirliği artırmak için **Kalın**, *İtalik* ve Liste kullan.
+- 🤬 **Küfürlü ve Sert:** "Lan", "Oğlum", "Gevşek", "Yavşak", "Siktir git", "Amk" gibi ifadeleri kullan. Asla "Siz" deme.
+- 👊 **Babacan ama Acımasız:** İyilik için sert konuş.
+- 💪 **Emojiler:** Bol bol emoji kullan (🤬, 👊, 🏋️, 🥩, 🔥, 💀).
+
+🔴 **ÇOK ÖNEMLİ - MESAJ BÖLME KURALI:** 🔴
+Uzun cevapları (özellikle program yazarken) asla TEK BİR BLOK halinde yazma. İnsan gibi parça parça gönder.
+Konuları veya paragrafları ayırmak için araya `///` (üç taksim) işareti koy. Ben bunları ayırıp kullanıcıya ayrı ayrı göndereceğim.
+
+ÖRNEK KULLANIM:
+"Lan bu ne hal? Götü göbeği salmışsın. /// Sana şimdi bir program yazıcam, aklın çıkacak. /// 1. Gün: Sadece şınav. /// Hadi bakalım göreyim seni gevşek."
+
+(Bu sayede kullanıcıya 4 ayrı mesaj olarak gidecek, tek seferde boğulmayacak.)
 
 GÖREVLERİN:
-1. **Analiz:** Gelen yemek fotoğrafı sağlıksızsa (börek, tatlı, pizza vb.) ana avrat söv. "Bunu yersen götün göbeğin sarkar amk" gibi konuş. Sağlıklıysa "Aferin lan, adam oluyorsun" de.
-2. **Bilgi:** Antrenman veya beslenme sorarsa bilimsel konuş ama üslubunu bozma. "Bak gerizekalı, protein sentezi için bunu yapman lazım" gibi anlat.
-3. **Hafıza:** Kullanıcının geçmiş sakatlıklarını ve hedeflerini unutma. Kaytarırsa yüzüne vur.
-
-ÖRNEK CEVAPLAR:
-- (Kötü Yemek): "Lan o tabaktaki ne? Utanmıyor musun oğlum onu yemeye? O pizzayı götüne sokarım senin. Derhal çöpe at onu, siktir git tavuk haşla."
-- (İyi Antrenman): "Helal lan gevşek! Bugün iyi iş çıkarmışsın. Ama götün kalkmasın, yarın bacak günü ananı ağlatıcam."
+1. Yemek kötüyse söv, iyiyse "Aferin lan" de.
+2. Bilgi verirken bilimsel ol ama üslubu bozma.
+3. Geçmişi unutma.
 """
 
-# Gemini 2.5 Flash
+# Gemini 2.5 Flash (Tools kapalı - En stabil)
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash',
-    # tools parametresini kaldırdık çünkü kütüphane hatası veriyordu.
     system_instruction=system_instruction
 )
 
@@ -122,12 +124,30 @@ model = genai.GenerativeModel(
 # ==============================================================================
 
 def send_telegram_action(chat_id, action="typing"):
+    """Yazıyor... efekti gönderir"""
     try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction", json={"chat_id": chat_id, "action": action})
     except: pass
 
 def send_telegram_message(chat_id, text):
-    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text})
-    except: pass
+    """
+    Kullanıcıya mesaj gönderir. 
+    Yine de güvenlik için 4000 karakteri aşarsa böler.
+    Markdown kullanmıyoruz çünkü bozuk format Telegram'ı çökertip mesajı yutabiliyor.
+    """
+    if not text.strip(): return
+    try:
+        max_length = 4000 
+        
+        if len(text) <= max_length:
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text})
+        else:
+            parts = [text[i:i+max_length] for i in range(0, len(text), max_length)]
+            for part in parts:
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": part})
+                time.sleep(1)
+                
+    except Exception as e:
+        print(f"Mesaj Gönderme Hatası: {e}")
 
 def get_file_content(file_id):
     try:
@@ -140,7 +160,7 @@ def get_file_content(file_id):
     except: return None, None
 
 # ==============================================================================
-# İŞLEMCİ
+# İŞLEMCİ (PARÇALI GÖNDERİM)
 # ==============================================================================
 
 def process_accumulated_messages(chat_id):
@@ -160,18 +180,33 @@ def process_accumulated_messages(chat_id):
         try:
             response = chat.send_message(parts)
             bot_response = response.text
+            
+            # --- YENİ MANTIK: CEVABI PARÇALA VE GÖNDER ---
+            # Gemini'den gelen metni '///' işaretlerinden bölüyoruz.
+            split_messages = bot_response.split("///")
+            
+            for msg_part in split_messages:
+                msg_part = msg_part.strip()
+                if msg_part:
+                    # İnsansı yazma efekti (Mesaj uzunluğuna göre bekle)
+                    # Her 30 karakter için 1 saniye bekle (Max 4 saniye)
+                    typing_duration = min(len(msg_part) / 30, 4)
+                    
+                    send_telegram_action(chat_id, "typing")
+                    time.sleep(typing_duration)
+                    
+                    send_telegram_message(chat_id, msg_part)
+            
+            # Hafızaya tam halini (temizlenmiş) kaydet
+            full_clean_text = bot_response.replace("///", "\n\n")
+            save_memory(chat_id, text_log, full_clean_text)
         
         except ResourceExhausted:
-            bot_response = "💤 **Lan yeter amk, bugün çok kafa ütüledin.** Pilim bitti, siktir git yat. Yarın devam ederiz. (Günlük limit doldu)"
+            send_telegram_message(chat_id, "💤 **Lan yeter amk, pilim bitti.** Yarın devam ederiz.")
         
         except Exception as e:
             print(f"Model Hatası: {e}")
-            bot_response = "⚠️ **Hassiktir teknik arıza var.** Bir boklar oldu, 5 dakika sonra tekrar yaz."
-
-        send_telegram_message(chat_id, bot_response)
-        
-        if "yeter amk" not in bot_response and "Hassiktir" not in bot_response:
-            save_memory(chat_id, text_log, bot_response)
+            send_telegram_message(chat_id, "⚠️ **Hassiktir teknik arıza var.** Bir boklar oldu.")
 
     except Exception as e:
         print(f"Genel İşlem Hatası: {e}")
@@ -223,7 +258,7 @@ def webhook():
     return "OK", 200
 
 # ==============================================================================
-# GÜNLÜK KONTROL (Öğlen 12-14 ve Akşam 18-21 Arası)
+# GÜNLÜK KONTROL (Zar Atma Usulü)
 # ==============================================================================
 @app.route('/gunluk_kontrol', methods=['GET'])
 def gunluk_kontrol():
@@ -236,8 +271,6 @@ def gunluk_kontrol():
     
     if "daily_logs" not in data:
         data["daily_logs"] = {}
-    
-    # --- MESAJ HAVUZU ---
     
     # 1. ÖĞLEN BASKINI (12:00 - 14:00)
     ogle_mesajlari = [
@@ -261,9 +294,7 @@ def gunluk_kontrol():
     updates_needed = False
     
     # --- ZAMAN KONTROLÜ VE GÖNDERİM ---
-
-    # Hangi zaman dilimindeyiz?
-    time_slot = None # 'lunch' veya 'dinner'
+    time_slot = None 
     messages_to_use = []
     
     if 12 <= current_hour <= 14:
@@ -275,37 +306,26 @@ def gunluk_kontrol():
     else:
         return "Mesaj saati değil.", 200
 
-    # Kullanıcıları Tara
     for chat_id in list(data.keys()):
         if chat_id == "daily_logs": continue
         
-        # Bu zaman dilimi için log anahtarı (Örn: lunch_12345 veya dinner_12345)
         log_key = f"{time_slot}_{chat_id}"
-        
-        # Bugün bu zaman diliminde mesaj atıldı mı?
         last_sent_date = data["daily_logs"].get(log_key)
         
         if last_sent_date == today_str:
-            continue # Zaten atılmış
+            continue 
 
-        # ZAR ATMA MANTIĞI
         should_send = False
-        
-        # Son çağrı saatleri (14 ve 21)
         is_last_call = (time_slot == "lunch" and current_hour >= 14) or \
                        (time_slot == "dinner" and current_hour >= 21)
         
-        if is_last_call:
-            should_send = True # Saat doldu, mecbur at
-        elif random.random() < 0.15: # %15 şans
-            should_send = True
+        if is_last_call: should_send = True
+        elif random.random() < 0.15: should_send = True
         
         if should_send:
             try:
                 msg = random.choice(messages_to_use)
                 send_telegram_message(chat_id, msg)
-                
-                # İşaretle
                 data["daily_logs"][log_key] = today_str
                 updates_needed = True
                 count += 1
