@@ -99,13 +99,12 @@ KİŞİLİK VE ÜSLUP:
 - 💪 **Emojiler:** Bol bol emoji kullan (🤬, 👊, 🏋️, 🥩, 🔥, 💀).
 
 🔴 **ÇOK ÖNEMLİ - MESAJ BÖLME KURALI:** 🔴
-Uzun cevapları (özellikle program yazarken) asla TEK BİR BLOK halinde yazma. İnsan gibi parça parça gönder.
-Konuları veya paragrafları ayırmak için araya `///` (üç taksim) işareti koy. Ben bunları ayırıp kullanıcıya ayrı ayrı göndereceğim.
+Uzun cevapları (özellikle program yazarken) asla TEK BİR BLOK halinde yazma.
+Her ana başlık, her gün veya her yeni konu arasında mutlaka `///` (üç taksim) işareti kullan.
+Örneğin: 1. Gün programını yaz bitir, sonuna `///` koy, sonra 2. güne başla.
 
-ÖRNEK KULLANIM:
-"Lan bu ne hal? Götü göbeği salmışsın. /// Sana şimdi bir program yazıcam, aklın çıkacak. /// 1. Gün: Sadece şınav. /// Hadi bakalım göreyim seni gevşek."
-
-(Bu sayede kullanıcıya 4 ayrı mesaj olarak gidecek, tek seferde boğulmayacak.)
+ÖRNEK:
+"Lan bu ne hal? /// Sana program yazıyorum. /// Pazartesi: Şınav... /// Salı: Mekik..."
 
 GÖREVLERİN:
 1. Yemek kötüyse söv, iyiyse "Aferin lan" de.
@@ -131,21 +130,50 @@ def send_telegram_action(chat_id, action="typing"):
 def send_telegram_message(chat_id, text):
     """
     Kullanıcıya mesaj gönderir. 
-    Yine de güvenlik için 4000 karakteri aşarsa böler.
-    Markdown kullanmıyoruz çünkü bozuk format Telegram'ı çökertip mesajı yutabiliyor.
+    Gelişmiş Bölme: 4000 karakteri aşarsa en uygun boşluktan veya noktadan böler.
+    Asla kelimeyi ortadan kesmez.
     """
     if not text.strip(): return
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    max_length = 4000
+    
     try:
-        max_length = 4000 
-        
+        # Mesaj kısaysa direkt gönder
         if len(text) <= max_length:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text})
-        else:
-            parts = [text[i:i+max_length] for i in range(0, len(text), max_length)]
-            for part in parts:
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": part})
-                time.sleep(1)
+            requests.post(url, json={"chat_id": chat_id, "text": text})
+            return
+
+        # Mesaj uzunsa akıllı döngüyle parçala
+        while text:
+            if len(text) <= max_length:
+                part = text
+                text = ""
+            else:
+                # 4000. karaktere yakın güvenli bir kesme noktası (newline veya nokta) bul
+                # Önce son satır sonuna bak
+                cut_index = text.rfind('\n', 0, max_length)
                 
+                # Bulamazsa son noktaya bak (. )
+                if cut_index == -1:
+                    cut_index = text.rfind('. ', 0, max_length)
+                
+                # Onu da bulamazsa son boşluğa bak
+                if cut_index == -1:
+                    cut_index = text.rfind(' ', 0, max_length)
+                
+                # Hiçbiri yoksa mecbur sert kes (ama bu çok nadir olur)
+                if cut_index == -1:
+                    cut_index = max_length
+
+                part = text[:cut_index]
+                # Kalan metni alırken baştaki boşlukları temizle
+                text = text[cut_index:].strip()
+
+            # Parçayı gönder
+            requests.post(url, json={"chat_id": chat_id, "text": part})
+            time.sleep(1) # Sıralama karışmasın
+
     except Exception as e:
         print(f"Mesaj Gönderme Hatası: {e}")
 
@@ -181,16 +209,26 @@ def process_accumulated_messages(chat_id):
             response = chat.send_message(parts)
             bot_response = response.text
             
-            # --- YENİ MANTIK: CEVABI PARÇALA VE GÖNDER ---
-            # Gemini'den gelen metni '///' işaretlerinden bölüyoruz.
+            # --- YENİ MANTIK: GÜÇLENDİRİLMİŞ PARÇALAMA ---
+            
+            # 1. Önce "///" işaretine göre bölmeye çalış (Bizim özel ayıracımız)
             split_messages = bot_response.split("///")
             
+            # 2. Eğer bölme başarısız olduysa (yapay zeka işareti unuttuysa)
+            # ve mesaj çok uzunsa, "çift satır başı" (\n\n) kullanarak bölmeyi dene.
+            # Bu sayede konu başlıkları yine ayrı mesaj olur.
+            if len(split_messages) == 1 and len(bot_response) > 2000:
+                # \n\n genelde paragrafları ayırır
+                possible_splits = bot_response.split("\n\n")
+                # Eğer mantıklı parçalar oluştuysa bunu kullan
+                if len(possible_splits) > 1:
+                    split_messages = possible_splits
+
             for msg_part in split_messages:
                 msg_part = msg_part.strip()
                 if msg_part:
                     # İnsansı yazma efekti (Mesaj uzunluğuna göre bekle)
-                    # Her 30 karakter için 1 saniye bekle (Max 4 saniye)
-                    typing_duration = min(len(msg_part) / 30, 4)
+                    typing_duration = min(len(msg_part) / 50, 4) # Biraz hızlandırdık
                     
                     send_telegram_action(chat_id, "typing")
                     time.sleep(typing_duration)
