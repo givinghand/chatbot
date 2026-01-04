@@ -7,6 +7,7 @@ import requests
 import threading
 from flask import Flask, request
 import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, GoogleAPICallError
 
 app = Flask(__name__)
 
@@ -23,10 +24,10 @@ GITHUB_REPO = GITHUB_REPO_RAW.replace("https://github.com/", "").strip("/")
 GITHUB_FILE_PATH = "koc_hafizasi.json"
 
 # BEKLEME SÜRESİ (Saniye)
-# Kullanıcı yazmayı bıraktıktan kaç saniye sonra cevap verilsin?
-WAIT_TIME = 15 
+# Sen mesaj atmayı kestikten kaç saniye sonra cevap versin?
+WAIT_TIME = 20 
 
-# Kullanıcıların mesajlarını geçici tuttuğumuz tampon bellek
+# Kullanıcı Tampon Belleği
 user_buffers = {}
 
 # ==============================================================================
@@ -67,10 +68,9 @@ def load_memory():
     return data
 
 def save_memory(chat_id, user_msg, bot_msg):
-    # Retry mekanizması
-    max_retries = 3
     str_chat_id = str(chat_id)
-    for attempt in range(max_retries):
+    # Retry (Tekrar deneme) mekanizması
+    for attempt in range(3):
         try:
             data, sha = get_github_file()
             if str_chat_id not in data: data[str_chat_id] = []
@@ -78,6 +78,7 @@ def save_memory(chat_id, user_msg, bot_msg):
             data[str_chat_id].append({"role": "user", "parts": [user_msg]})
             data[str_chat_id].append({"role": "model", "parts": [bot_msg]})
             
+            # Hafıza çok şişerse son 200 mesajı tut
             if len(data[str_chat_id]) > 200:
                 data[str_chat_id] = data[str_chat_id][-200:]
 
@@ -86,19 +87,41 @@ def save_memory(chat_id, user_msg, bot_msg):
         except: time.sleep(1)
 
 # ==============================================================================
-# AI & TELEGRAM AYARLARI
+# AI AYARLARI (Web Search + Babacan Mod)
 # ==============================================================================
 genai.configure(api_key=GEMINI_API_KEY)
+
 system_instruction = """
-Sen profesyonel bir yapay zeka spor ve beslenme koçusun. Adın: 'Beton Koç'.
-KİŞİLİK: Disiplinli, otoriter ama babacan. "Aslanım", "Hocam", "Şampiyon" de. "Siz" deme.
-GÖREV: Gelen TÜM fotoğrafları ve metinleri tek bir bağlamda değerlendir.
-Eğer 3-4 yemek fotosu geldiyse hepsini topla, genel bir yorum yap.
+Sen "Beton Koç" lakaplı, profesyonel ama babacan bir yapay zeka spor ve beslenme koçusun.
+
+KİŞİLİK VE ÜSLUP:
+- 👊 **Babacan ve Otoriter:** "Aslanım", "Şampiyon", "Hocam", "Evlat", "Kral" gibi hitaplar kullan. Asla "Siz" deme.
+- 💪 **Emojiler:** Mesajlarında mutlaka duruma uygun emojiler kullan (🏋️, 🥩, 🥗, 🔥, 🛑 gibi).
+- 📏 **Kısa ve Öz:** Lafı dolandırma. Destan yazma. Net ol.
+- 🎨 **Format:** Okunabilirliği artırmak için **Kalın**, *İtalik* ve Liste (Madde imi) özelliklerini sıkça kullan.
+
+GÖREVLERİN:
+1. **Analiz:** Gelen yemek veya vücut fotoğraflarını bir koç gözüyle yorumla. Kötüyse fırçala, iyiyse öv.
+2. **Araştırma:** Kullanıcı antrenman veya beslenme programı isterse, **Google Search** aracını kullanarak en güncel ve bilimsel bilgileri bul, özetleyerek sun.
+3. **Hafıza:** Kullanıcının geçmiş sakatlıklarını ve hedeflerini asla unutma.
+
+ÖRNEK CEVAP:
+"🔥 **Aslanım antrenman güzel geçmiş!** Ama o tabaktaki pilav ne öyle? Dağ gibi yığmışsın.
+🛑 Karbonhidratı biraz kıs, proteine aban.
+✅ Tavuk göğsü miktarını artır.
+✅ Yanına bol yeşillik ekle."
 """
 
-# DİKKAT: Modeli 'gemini-1.5-flash' yaptık. Bu modelin limiti çok yüksektir.
-# 2.5-flash'ın limiti günde 20 olduğu için hata veriyordu.
-model = genai.GenerativeModel(model_name='gemini-1.5-flash', system_instruction=system_instruction)
+# Gemini 2.5 Flash + Google Search Aracı
+model = genai.GenerativeModel(
+    model_name='gemini-2.5-flash',
+    tools='google_search',
+    system_instruction=system_instruction
+)
+
+# ==============================================================================
+# TELEGRAM YARDIMCI FONKSİYONLAR
+# ==============================================================================
 
 def send_telegram_action(chat_id, action="typing"):
     try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction", json={"chat_id": chat_id, "action": action})
@@ -119,15 +142,12 @@ def get_file_content(file_id):
     except: return None, None
 
 # ==============================================================================
-# ARKA PLAN İŞLEMCİSİ (HEPSİNİ TOPLAYIP CEVAP VEREN KISIM)
+# İŞLEMCİ (Tüm mesajları toplayıp cevaplayan merkez)
 # ==============================================================================
 
 def process_accumulated_messages(chat_id):
-    """Süre dolunca çalışır. Tampondaki her şeyi paketleyip Gemini'ye yollar."""
     try:
         if chat_id not in user_buffers: return
-
-        # Tampondaki verileri al
         buffer_data = user_buffers.pop(chat_id)
         parts = buffer_data['parts']
         text_log = buffer_data['logs']
@@ -136,42 +156,34 @@ def process_accumulated_messages(chat_id):
 
         send_telegram_action(chat_id, "typing")
 
-        # Hafızayı ve Modeli Çağır
+        # Hafızayı Yükle
         history = load_memory().get(str(chat_id), [])
         chat = model.start_chat(history=history)
         
-        # --- GÜNCELLEME: AKILLI BEKLEME (429 HATASI İÇİN) ---
-        bot_response = "Antrenmandayım, sonra döneceğim."
+        # Gemini'ye Gönder (Hata Yönetimi Ekli)
+        try:
+            response = chat.send_message(parts)
+            bot_response = response.text
         
-        # 3 kere deneme hakkı veriyoruz
-        for attempt in range(3):
-            try:
-                response = chat.send_message(parts)
-                bot_response = response.text
-                break # Başarılı olursa döngüden çık
-            except Exception as e:
-                error_msg = str(e)
-                if "429" in error_msg:
-                    # Kota doldu derse 22 saniye bekle (Google 21sn bekle demiş)
-                    print(f"Kota Limiti (429). 22 saniye bekleniyor... (Deneme {attempt+1})")
-                    time.sleep(22)
-                    continue
-                else:
-                    # Başka hataysa direkt hatayı ver
-                    raise e
+        except ResourceExhausted: # 429 Limit Hatası
+            bot_response = "💤 **Aslanım bugün çok çalıştık, pilim bitti.** Yoruldum valla. Yarın bomba gibi devam edelim, olur mu? (Günlük limit doldu)"
+        
+        except Exception as e: # Diğer hatalar
+            print(f"Model Hatası: {e}")
+            bot_response = "⚠️ **Hocam hatlar karıştı.** Teknik bir sıkıntı var, bi 5 dakika soluklanıp tekrar yazsana."
 
-        # Cevabı Telegram'a yaz
+        # Cevabı Gönder
         send_telegram_message(chat_id, bot_response)
         
-        # Hafızaya kaydet
-        save_memory(chat_id, text_log, bot_response)
+        # Hafızaya Kaydet (Hata mesajlarını kaydetme ki hafıza kirlenmesin)
+        if "Yoruldum" not in bot_response and "hatlar karıştı" not in bot_response:
+            save_memory(chat_id, text_log, bot_response)
 
     except Exception as e:
-        print(f"İşleme Hatası: {e}")
-        send_telegram_message(chat_id, f"Aslanım bir sıkıntı çıktı. Hata detayı: {str(e)}")
+        print(f"Genel İşlem Hatası: {e}")
 
 # ==============================================================================
-# WEBHOOK
+# WEBHOOK (Mesajları toplama merkezi)
 # ==============================================================================
 
 @app.route('/', methods=['POST'])
@@ -181,30 +193,24 @@ def webhook():
 
     chat_id = data["message"]["chat"]["id"]
     
-    # 1. Kullanıcı tamponunu oluştur
+    # Kullanıcı için tampon oluştur
     if chat_id not in user_buffers:
-        user_buffers[chat_id] = {
-            "parts": [],
-            "logs": "",
-            "timer": None
-        }
+        user_buffers[chat_id] = {"parts": [], "logs": "", "timer": None}
 
-    # 2. Eski sayacı iptal et
+    # Eski sayacı iptal et (Debounce - Bekletme)
     if user_buffers[chat_id]["timer"]:
         user_buffers[chat_id]["timer"].cancel()
 
-    # 3. Gelen veriyi tampona ekle
+    # Veriyi ekle
     if "photo" in data["message"]:
         file_id = data["message"]["photo"][-1]["file_id"]
         content, mime = get_file_content(file_id)
         if content:
             user_buffers[chat_id]["parts"].append({"mime_type": mime, "data": content})
             user_buffers[chat_id]["logs"] += "[Foto] "
-        
-        caption = data["message"].get("caption", "")
-        if caption:
-            user_buffers[chat_id]["parts"].append(caption)
-            user_buffers[chat_id]["logs"] += caption + " "
+        if data["message"].get("caption"):
+            user_buffers[chat_id]["parts"].append(data["message"]["caption"])
+            user_buffers[chat_id]["logs"] += data["message"]["caption"] + " "
 
     elif "voice" in data["message"]:
         file_id = data["message"]["voice"]["file_id"]
@@ -219,7 +225,7 @@ def webhook():
         user_buffers[chat_id]["parts"].append(text)
         user_buffers[chat_id]["logs"] += text + " "
 
-    # 4. Yeni Sayaç Başlat
+    # Yeni Sayaç Başlat (20 Saniye Bekle)
     timer = threading.Timer(WAIT_TIME, process_accumulated_messages, args=[chat_id])
     user_buffers[chat_id]["timer"] = timer
     timer.start()
@@ -227,20 +233,28 @@ def webhook():
     return "OK", 200
 
 # ==============================================================================
-# GÜNLÜK KONTROL
+# GÜNLÜK KONTROL (Akşam 6-7 gibi tetiklenecek)
 # ==============================================================================
 @app.route('/gunluk_kontrol', methods=['GET'])
 def gunluk_kontrol():
     memory = load_memory()
-    mesajlar = ["Akşam raporu ver aslanım!", "İdman yapıldı mı?", "Bugün kaçamak var mı?"]
+    # Koçun akşam mesajları
+    mesajlar = [
+        "🌙 **Akşam oldu şampiyon!** Bugün antrenman yapıldı mı? Dökül bakalım. 🏋️‍♂️",
+        "👀 **Beton Koç Gözetliyor:** Bugün kaçamak yaptın mı? Dürüst ol! 🍕❌",
+        "🥗 **Rapor Zamanı Aslanım!** Bugün protein hedefini tutturdun mu?",
+        "📉 **Günün nasıl geçti kral?** Spor ve beslenme raporunu bekliyorum. 🔥"
+    ]
+    
     count = 0
     for chat_id in memory.keys():
         try:
-            send_telegram_message(chat_id, random.choice(mesajlar))
+            msg = random.choice(mesajlar)
+            send_telegram_message(chat_id, msg)
             count += 1
-            time.sleep(2)
+            time.sleep(2) # Spam olmasın diye araya süre koy
         except: continue
-    return f"{count} kişiye mesaj atıldı.", 200
+    return f"{count} kişiye akşam mesajı atıldı.", 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
