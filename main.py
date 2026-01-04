@@ -5,6 +5,7 @@ import json
 import base64
 import requests
 import threading
+from datetime import datetime, timedelta
 from flask import Flask, request
 import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, GoogleAPICallError
@@ -23,8 +24,9 @@ GITHUB_REPO_RAW = os.environ.get("GITHUB_REPO", "")
 GITHUB_REPO = GITHUB_REPO_RAW.replace("https://github.com/", "").strip("/")
 GITHUB_FILE_PATH = "koc_hafizasi.json"
 
-# BEKLEME SÜRESİ (Saniye)
-# Sen mesaj atmayı kestikten kaç saniye sonra cevap versin?
+# BEKLEME SÜRESİ (Saniye) - Akıllı Bekleme
+# Sen mesaj atmayı kestikten 20 saniye sonra cevap verir.
+# Bu süre içinde yeni mesaj/foto atarsan sayaç sıfırlanır, hepsini birleştirir.
 WAIT_TIME = 20 
 
 # Kullanıcı Tampon Belleği
@@ -142,10 +144,14 @@ def get_file_content(file_id):
     except: return None, None
 
 # ==============================================================================
-# İŞLEMCİ (Tüm mesajları toplayıp cevaplayan merkez)
+# İŞLEMCİ (NORMAL MESAJLAR - ZAR YOK, KESİN CEVAP VAR)
 # ==============================================================================
 
 def process_accumulated_messages(chat_id):
+    """
+    Senin mesajlarına cevap veren fonksiyon.
+    Burada ZAR YOKTUR. Mesaj geldiyse süre dolunca KESİN cevap verir.
+    """
     try:
         if chat_id not in user_buffers: return
         buffer_data = user_buffers.pop(chat_id)
@@ -233,28 +239,80 @@ def webhook():
     return "OK", 200
 
 # ==============================================================================
-# GÜNLÜK KONTROL (Akşam 6-7 gibi tetiklenecek)
+# GÜNLÜK KONTROL (Zar Atma Usulü - SADECE BURADA ZAR VAR)
 # ==============================================================================
 @app.route('/gunluk_kontrol', methods=['GET'])
 def gunluk_kontrol():
-    memory = load_memory()
+    # 1. Hafızayı ve Durumu Çek
+    data, sha = get_github_file()
+    
+    # Bugünün tarihi (YYYY-MM-DD)
+    # Render sunucusu UTC'dir. Türkiye saati (UTC+3) için 3 saat ekliyoruz.
+    now_tr = datetime.utcnow() + timedelta(hours=3)
+    today_str = now_tr.strftime("%Y-%m-%d")
+    current_hour = now_tr.hour
+    
+    # Sadece 18:00 ile 21:00 arasında çalış
+    if current_hour < 18 or current_hour > 21:
+        return "Mesaj saati değil.", 200
+
+    # Günlük durumları tuttuğumuz özel alan
+    if "daily_logs" not in data:
+        data["daily_logs"] = {}
+    
     # Koçun akşam mesajları
     mesajlar = [
         "🌙 **Akşam oldu şampiyon!** Bugün antrenman yapıldı mı? Dökül bakalım. 🏋️‍♂️",
         "👀 **Beton Koç Gözetliyor:** Bugün kaçamak yaptın mı? Dürüst ol! 🍕❌",
         "🥗 **Rapor Zamanı Aslanım!** Bugün protein hedefini tutturdun mu?",
-        "📉 **Günün nasıl geçti kral?** Spor ve beslenme raporunu bekliyorum. 🔥"
+        "📉 **Günün nasıl geçti kral?** Spor ve beslenme raporunu bekliyorum. 🔥",
+        "👋 **Hocam sesin çıkmıyor?** Bugün hedefler tuttu mu? Bir ses ver."
     ]
     
     count = 0
-    for chat_id in memory.keys():
-        try:
-            msg = random.choice(mesajlar)
-            send_telegram_message(chat_id, msg)
-            count += 1
-            time.sleep(2) # Spam olmasın diye araya süre koy
-        except: continue
-    return f"{count} kişiye akşam mesajı atıldı.", 200
+    updates_needed = False
+
+    # Tüm kullanıcıları tara
+    for chat_id in list(data.keys()):
+        if chat_id == "daily_logs": continue
+        
+        # Bu kullanıcıya bugün mesaj atıldı mı?
+        last_sent_date = data["daily_logs"].get(chat_id)
+        
+        if last_sent_date == today_str:
+            continue # Zaten atılmış, KESİNLİKLE atma (Karışıklık olmasın)
+
+        # Mesaj atılmadıysa ZAR ATALIM!
+        # Mantık: Cron job 15 dakikada bir çalışacak.
+        # Her çalışışta %15 şansla mesaj atacağız. (Böylece hemen 18:00'da atmaz, yayılır)
+        # Saat 21'i geçtiyse (veya 21 olduysa) şansa bırakma, KESİN at (Unutmasın diye).
+        should_send = False
+        
+        if current_hour >= 21:
+            should_send = True # Son çağrı (Gece oldu hala atmadıysa at)
+        elif random.random() < 0.15: # %15 şans (Zar atıyoruz)
+            should_send = True
+        else:
+            # Zar tutmadı, bu tur pas geçiyoruz. Mesaj yok.
+            should_send = False
+        
+        if should_send:
+            try:
+                msg = random.choice(mesajlar)
+                send_telegram_message(chat_id, msg)
+                
+                # "Bugün atıldı" olarak işaretle
+                data["daily_logs"][chat_id] = today_str
+                updates_needed = True
+                count += 1
+                time.sleep(1) # Spam olmasın
+            except: continue
+
+    # Eğer birilerine mesaj attıysak durumu GitHub'a kaydet
+    if updates_needed:
+        update_github_file(data, sha)
+
+    return f"{count} kişiye akşam mesajı atıldı (veya zaten atılmıştı).", 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
