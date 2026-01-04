@@ -115,9 +115,10 @@ GÖREVLERİN:
 """
 
 # Gemini 2.5 Flash + Google Search Aracı
+# DÜZELTME: tools parametresi artık liste içinde sözlük olarak gönderiliyor.
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash',
-    tools='google_search',
+    tools=[{"google_search": {}}],  # <-- Düzeltilen Kısım
     system_instruction=system_instruction
 )
 
