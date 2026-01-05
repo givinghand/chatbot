@@ -81,7 +81,7 @@ def save_memory(chat_id, user_msg, bot_msg):
         except: time.sleep(1)
 
 # ==============================================================================
-# AI AYARLARI
+# AI AYARLARI (SADECE 2.0 FLASH - NO FALLBACK TO 1.5)
 # ==============================================================================
 
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -107,7 +107,10 @@ GÖREVLERİN:
 3. Geçmişi unutma.
 """
 
-MODELS_TO_TRY = ["gemini-2.0-flash", "gemini-1.5-flash"]
+# HEDEF MODELLER: Sadece 2.0 serisi.
+# gemini-2.0-flash-exp: Genelde en güncel ve erişilebilir olan deneysel sürüm.
+# gemini-2.0-flash: Kararlı sürüm (bazen bölgeye göre gecikebilir).
+MODELS_TO_TRY = ["gemini-2.0-flash-exp", "gemini-2.0-flash"]
 
 def generate_ai_response(history, new_parts):
     config = types.GenerateContentConfig(
@@ -152,7 +155,7 @@ def generate_ai_response(history, new_parts):
             last_error = str(e)
             continue
 
-    return f"⚠️ **Hassiktir teknik arıza var.** Sunucular patladı. Hata: {last_error}"
+    return f"⚠️ **Hassiktir teknik arıza var.** Gemini 2.0 modellerine ulaşılamıyor. Hata: {last_error}"
 
 # ==============================================================================
 # TELEGRAM
@@ -278,66 +281,46 @@ def webhook():
 
     return "OK", 200
 
-# ==============================================================================
-# GÜNLÜK KONTROL (Hafif ve Sessiz Mod)
-# ==============================================================================
 @app.route('/gunluk_kontrol', methods=['GET'])
 def gunluk_kontrol():
-    # Burası cron-job için çalışır. Ağır işlem yapmadan hemen cevap dönmeye çalışırız.
+    data, sha = get_github_file()
+    now_tr = datetime.utcnow() + timedelta(hours=3)
+    today_str = now_tr.strftime("%Y-%m-%d")
+    current_hour = now_tr.hour
     
-    try:
-        data, sha = get_github_file()
-        if not data: return "No Data", 200
+    if "daily_logs" not in data: data["daily_logs"] = {}
+    
+    ogle = ["🕛 **Lan! Öğlen oldu!** 🥗", "🍔 **Hamburger yeme sikerim.**", "👀 **Ne yiyon?** Foto at!", "💀 **Diyetini bozma.**", "🥗 **Ot ye ot.**"]
+    aksam = ["🌙 **Akşam oldu!** İdman nerede? 🏋️‍♂️", "🍕 **Yine mi hamur yedin?**", "📉 **Rapor ver lan!**", "🖕 **Şınav çek.**", "👋 **Ses ver.**"]
 
-        now_tr = datetime.utcnow() + timedelta(hours=3)
-        today_str = now_tr.strftime("%Y-%m-%d")
-        current_hour = now_tr.hour
+    updates = False
+    slot = None
+    msgs = []
+    
+    if 12 <= current_hour <= 14: slot, msgs = "lunch", ogle
+    elif 18 <= current_hour <= 21: slot, msgs = "dinner", aksam
+    else: return "OK", 200
+
+    for cid in list(data.keys()):
+        if cid == "daily_logs": continue
+        key = f"{slot}_{cid}"
+        if data["daily_logs"].get(key) == today_str: continue 
+
+        should_send = False
+        is_last = (slot == "lunch" and current_hour >= 14) or (slot == "dinner" and current_hour >= 21)
+        if is_last or random.random() < 0.15: should_send = True
         
-        if "daily_logs" not in data: data["daily_logs"] = {}
-        
-        ogle = ["🕛 **Lan! Öğlen oldu!** 🥗", "🍔 **Hamburger yeme sikerim.**", "👀 **Ne yiyon?** Foto at!", "💀 **Diyetini bozma.**", "🥗 **Ot ye ot.**"]
-        aksam = ["🌙 **Akşam oldu!** İdman nerede? 🏋️‍♂️", "🍕 **Yine mi hamur yedin?**", "📉 **Rapor ver lan!**", "🖕 **Şınav çek.**", "👋 **Ses ver.**"]
+        if should_send:
+            try:
+                msg = random.choice(msgs)
+                t = threading.Thread(target=send_telegram_message, args=(cid, msg))
+                t.start()
+                data["daily_logs"][key] = today_str
+                updates = True
+            except: continue
 
-        updates = False
-        slot = None
-        msgs = []
-        
-        if 12 <= current_hour <= 14: slot, msgs = "lunch", ogle
-        elif 18 <= current_hour <= 21: slot, msgs = "dinner", aksam
-        else: return "OK", 200 # Zamanı değilse hemen OK dön
-
-        # İşlemleri arka planda yapalım ki cron-job timeout yemesin
-        # Ancak basit bir döngü olduğu için burada tutuyoruz, sadece sleep'i azalttık
-        
-        for cid in list(data.keys()):
-            if cid == "daily_logs": continue
-            key = f"{slot}_{cid}"
-            if data["daily_logs"].get(key) == today_str: continue 
-
-            should_send = False
-            is_last = (slot == "lunch" and current_hour >= 14) or (slot == "dinner" and current_hour >= 21)
-            if is_last or random.random() < 0.15: should_send = True
-            
-            if should_send:
-                try:
-                    # Thread içinde gönder ki ana işlem uzamasın
-                    msg = random.choice(msgs)
-                    t = threading.Thread(target=send_telegram_message, args=(cid, msg))
-                    t.start()
-                    
-                    data["daily_logs"][key] = today_str
-                    updates = True
-                except: continue
-
-        if updates: 
-            # GitHub güncellemesini de arka plana atabiliriz ama veri bütünlüğü için burada kalsın
-            update_github_file(data, sha)
-            
-        return "OK", 200 # Daima kısa cevap dön
-
-    except Exception as e:
-        print(f"Cron Hatası: {e}")
-        return "Error", 500
+    if updates: update_github_file(data, sha)
+    return "OK", 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
