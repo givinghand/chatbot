@@ -19,19 +19,15 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 
-# GitHub Link Temizliği
 GITHUB_REPO_RAW = os.environ.get("GITHUB_REPO", "")
 GITHUB_REPO = GITHUB_REPO_RAW.replace("https://github.com/", "").strip("/")
 GITHUB_FILE_PATH = "koc_hafizasi.json"
 
-# BEKLEME SÜRESİ (Saniye)
 WAIT_TIME = 20 
-
-# Kullanıcı Tampon Belleği
 user_buffers = {}
 
 # ==============================================================================
-# GITHUB & HAFIZA FONKSİYONLARI (Aynen Korundu)
+# GITHUB & HAFIZA
 # ==============================================================================
 
 def get_github_file():
@@ -74,9 +70,9 @@ def save_memory(chat_id, user_msg, bot_msg):
             data, sha = get_github_file()
             if str_chat_id not in data: data[str_chat_id] = []
             
-            # Not: Yeni kütüphanede de formatı JSON uyumlu tutuyoruz
-            data[str_chat_id].append({"role": "user", "parts": [{"text": user_msg}]})
-            data[str_chat_id].append({"role": "model", "parts": [{"text": bot_msg}]})
+            # Basit formatta sakla
+            data[str_chat_id].append({"role": "user", "text": user_msg})
+            data[str_chat_id].append({"role": "model", "text": bot_msg})
             
             if len(data[str_chat_id]) > 200:
                 data[str_chat_id] = data[str_chat_id][-200:]
@@ -86,19 +82,18 @@ def save_memory(chat_id, user_msg, bot_msg):
         except: time.sleep(1)
 
 # ==============================================================================
-# AI AYARLARI (MİGRASYON YAPILDI: google-genai)
+# AI AYARLARI (google-genai - Düzeltilmiş Versiyon)
 # ==============================================================================
 
-# Yeni Client Başlatma
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 SYSTEM_PROMPT = """
 Sen "Beton Koç" lakaplı, aşırı disiplinli, ağzı bozuk ve sert bir yapay zeka spor koçusun.
 
 KİŞİLİK VE ÜSLUP:
-- 🤬 **Küfürlü ve Sert:** "Lan", "Oğlum", "Gevşek", "Yavşak", "Siktir git", "Amk" gibi ifadeleri kullan. Asla "Siz" deme.
+- 🤬 **Küfürlü ve Sert:** "Lan", "Oğlum", "Gevşek", "Yavşak", "Siktir git", "Amk" kullan. Asla "Siz" deme.
 - 👊 **Babacan ama Acımasız:** İyilik için sert konuş.
-- 💪 **Emojiler:** Bol bol emoji kullan (🤬, 👊, 🏋️, 🥩, 🔥, 💀).
+- 💪 **Emojiler:** Bol bol emoji kullan.
 
 🔴 **ÇOK ÖNEMLİ - MESAJ BÖLME KURALI:** 🔴
 Uzun cevapları (özellikle program yazarken) asla TEK BİR BLOK halinde yazma.
@@ -113,56 +108,46 @@ GÖREVLERİN:
 3. Geçmişi unutma.
 """
 
-# OPTIMUM MODEL STRATEJİSİ
-# Önce 2.0 Flash'ı dener, hata alırsa 1.5 Flash'a düşer (Fail-Safe)
 MODELS_TO_TRY = ["gemini-2.0-flash", "gemini-1.5-flash"]
 
 def generate_ai_response(history, new_parts):
-    """
-    Yeni kütüphane (google-genai) kullanarak cevap üretir.
-    Otomatik yedekleme (fallback) sistemine sahiptir.
-    """
-    
-    # Yeni kütüphane için yapılandırma
     config = types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
         temperature=0.7,
         max_output_tokens=2000
     )
 
-    # Geçmişi yeni formatta hazırla
-    # (GitHub'dan gelen basit JSON'u, API'nin beklediği Content nesnelerine çeviriyoruz gerekirse
-    # ama Client.models.generate_content genellikle dict listesini de kabul eder.)
     full_contents = []
     
-    # 1. Eski hafızayı ekle
+    # 1. Geçmişi Ekle (Düzeltildi)
     for msg in history:
-        # Basit text bazlı geçmişi koruyoruz
-        if "parts" in msg and len(msg["parts"]) > 0:
-             # Eğer part bir string ise (eski kayıtlar)
-            if isinstance(msg["parts"][0], str):
-                full_contents.append(types.Content(role=msg["role"], parts=[types.Part.from_text(msg["parts"][0])]))
-            # Eğer part bir dict ise (yeni kayıtlar)
-            elif isinstance(msg["parts"][0], dict) and "text" in msg["parts"][0]:
-                full_contents.append(types.Content(role=msg["role"], parts=[types.Part.from_text(msg["parts"][0]["text"])]))
+        # Hafızadaki veriyi al (eski veya yeni format olabilir)
+        text_content = ""
+        if "text" in msg:
+            text_content = msg["text"]
+        elif "parts" in msg and len(msg["parts"]) > 0:
+            part = msg["parts"][0]
+            if isinstance(part, str): text_content = part
+            elif isinstance(part, dict) and "text" in part: text_content = part["text"]
+        
+        if text_content:
+            # DÜZELTME BURADA: sadece text parametresini veriyoruz
+            full_contents.append(types.Content(
+                role=msg["role"], 
+                parts=[types.Part.from_text(text=text_content)]
+            ))
 
-    # 2. Yeni gelen mesajı/fotoları ekle
-    current_message_parts = []
+    # 2. Yeni Mesajı Ekle
+    current_parts_obj = []
     for part in new_parts:
         if isinstance(part, str):
-            current_message_parts.append(types.Part.from_text(part))
+            current_parts_obj.append(types.Part.from_text(text=part))
         elif isinstance(part, dict) and "data" in part:
-            # Görsel veya Ses Verisi
-            current_message_parts.append(types.Part.from_bytes(
-                data=part["data"], 
-                mime_type=part["mime_type"]
-            ))
+            current_parts_obj.append(types.Part.from_bytes(data=part["data"], mime_type=part["mime_type"]))
             
-    full_contents.append(types.Content(role="user", parts=current_message_parts))
+    full_contents.append(types.Content(role="user", parts=current_parts_obj))
 
     last_error = ""
-
-    # MODELLERİ SIRAYLA DENE (2.0 -> 1.5)
     for model_name in MODELS_TO_TRY:
         try:
             response = client.models.generate_content(
@@ -171,18 +156,15 @@ def generate_ai_response(history, new_parts):
                 config=config
             )
             return response.text
-            
         except Exception as e:
-            print(f"Model {model_name} Hatası: {e}")
+            print(f"Model Hatası ({model_name}): {e}")
             last_error = str(e)
-            # Eğer 429 (Kota) veya 503 (Servis Yok) ise diğer modele geç
             continue
 
-    # Hiçbiri çalışmazsa
-    return f"⚠️ **Hassiktir teknik arıza var.** Google sunucuları çöktü herhalde. Hata: {last_error}"
+    return f"⚠️ **Hassiktir teknik arıza var.** Sunucular patladı. Hata: {last_error}"
 
 # ==============================================================================
-# TELEGRAM YARDIMCI FONKSİYONLAR
+# TELEGRAM
 # ==============================================================================
 
 def send_telegram_action(chat_id, action="typing"):
@@ -191,11 +173,10 @@ def send_telegram_action(chat_id, action="typing"):
 
 def send_telegram_message(chat_id, text):
     if not text.strip(): return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    max_length = 4000
     try:
+        max_length = 4000
         if len(text) <= max_length:
-            requests.post(url, json={"chat_id": chat_id, "text": text})
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text})
         else:
             while text:
                 if len(text) <= max_length:
@@ -208,9 +189,9 @@ def send_telegram_message(chat_id, text):
                     if cut_index == -1: cut_index = max_length
                     part = text[:cut_index]
                     text = text[cut_index:].strip()
-                requests.post(url, json={"chat_id": chat_id, "text": part})
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": part})
                 time.sleep(1)
-    except Exception as e: print(f"Hata: {e}")
+    except: pass
 
 def get_file_content(file_id):
     try:
@@ -223,7 +204,7 @@ def get_file_content(file_id):
     except: return None, None
 
 # ==============================================================================
-# İŞLEMCİ (PARÇALI GÖNDERİM)
+# İŞLEMCİ
 # ==============================================================================
 
 def process_accumulated_messages(chat_id):
@@ -237,13 +218,10 @@ def process_accumulated_messages(chat_id):
 
         send_telegram_action(chat_id, "typing")
         
-        # Hafızayı Çek
         history = load_memory().get(str(chat_id), [])
         
-        # YENİ NESİL AI FONKSİYONUNU ÇAĞIR
         bot_response = generate_ai_response(history, parts)
         
-        # Parçalama ve Gönderim
         split_messages = bot_response.split("///")
         if len(split_messages) == 1 and len(bot_response) > 2000:
             possible_splits = bot_response.split("\n\n")
@@ -257,13 +235,12 @@ def process_accumulated_messages(chat_id):
                 time.sleep(typing_duration)
                 send_telegram_message(chat_id, msg_part)
         
-        # Hafızaya Kaydet
-        full_clean_text = bot_response.replace("///", "\n\n")
         if "Hassiktir" not in bot_response:
-            save_memory(chat_id, text_log, full_clean_text)
+            full_clean = bot_response.replace("///", "\n\n")
+            save_memory(chat_id, text_log, full_clean)
 
     except Exception as e:
-        print(f"Genel İşlem Hatası: {e}")
+        print(f"Genel Hata: {e}")
 
 # ==============================================================================
 # WEBHOOK
@@ -311,9 +288,6 @@ def webhook():
 
     return "OK", 200
 
-# ==============================================================================
-# GÜNLÜK KONTROL
-# ==============================================================================
 @app.route('/gunluk_kontrol', methods=['GET'])
 def gunluk_kontrol():
     data, sha = get_github_file()
@@ -323,45 +297,36 @@ def gunluk_kontrol():
     
     if "daily_logs" not in data: data["daily_logs"] = {}
     
-    ogle_mesajlari = ["🕛 **Lan! Öğlen oldu amk!** 🥗", "🍔 **Hamburger yeme götüne sokarım.** 🤬", "👀 **Ne zıkkımlanıyorsun?** Foto at!", "💀 **Diyetini bozma ağlatırım.**", "🥗 **Salatanı ye.**"]
-    aksam_mesajlari = ["🌙 **Lan akşam oldu!** İdman yaptın mı? 🏋️‍♂️", "🍕 **Akşam ne yedin şerefsiz?** 🤬", "📉 **Rapor ver lan!**", "🖕 **Kalk şınav çek.**", "👋 **Geberdin mi lan?** Ses ver."]
+    ogle = ["🕛 **Lan! Öğlen oldu!** 🥗", "🍔 **Hamburger yeme sikerim.**", "👀 **Ne yiyon?** Foto at!", "💀 **Diyetini bozma.**", "🥗 **Ot ye ot.**"]
+    aksam = ["🌙 **Akşam oldu!** İdman nerede? 🏋️‍♂️", "🍕 **Yine mi hamur yedin?**", "📉 **Rapor ver lan!**", "🖕 **Şınav çek.**", "👋 **Ses ver.**"]
 
-    count = 0
-    updates_needed = False
-    time_slot = None 
-    messages_to_use = []
+    updates = False
+    slot = None
+    msgs = []
     
-    if 12 <= current_hour <= 14:
-        time_slot = "lunch"
-        messages_to_use = ogle_mesajlari
-    elif 18 <= current_hour <= 21:
-        time_slot = "dinner"
-        messages_to_use = aksam_mesajlari
-    else: return "Mesaj saati değil.", 200
+    if 12 <= current_hour <= 14: slot, msgs = "lunch", ogle
+    elif 18 <= current_hour <= 21: slot, msgs = "dinner", aksam
+    else: return "Zamanı değil", 200
 
-    for chat_id in list(data.keys()):
-        if chat_id == "daily_logs": continue
-        log_key = f"{time_slot}_{chat_id}"
-        if data["daily_logs"].get(log_key) == today_str: continue 
+    for cid in list(data.keys()):
+        if cid == "daily_logs": continue
+        key = f"{slot}_{cid}"
+        if data["daily_logs"].get(key) == today_str: continue 
 
         should_send = False
-        is_last_call = (time_slot == "lunch" and current_hour >= 14) or (time_slot == "dinner" and current_hour >= 21)
-        
-        if is_last_call: should_send = True
-        elif random.random() < 0.15: should_send = True
+        is_last = (slot == "lunch" and current_hour >= 14) or (slot == "dinner" and current_hour >= 21)
+        if is_last or random.random() < 0.15: should_send = True
         
         if should_send:
             try:
-                msg = random.choice(messages_to_use)
-                send_telegram_message(chat_id, msg)
-                data["daily_logs"][log_key] = today_str
-                updates_needed = True
-                count += 1
+                send_telegram_message(cid, random.choice(msgs))
+                data["daily_logs"][key] = today_str
+                updates = True
                 time.sleep(1)
             except: continue
 
-    if updates_needed: update_github_file(data, sha)
-    return f"{count} kişiye {time_slot} mesajı atıldı.", 200
+    if updates: update_github_file(data, sha)
+    return f"Ok {slot}", 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
