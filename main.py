@@ -81,7 +81,7 @@ def save_memory(chat_id, user_msg, bot_msg):
         except: time.sleep(1)
 
 # ==============================================================================
-# AI AYARLARI (SADECE 2.0 FLASH - NO FALLBACK TO 1.5)
+# AI AYARLARI (YENİ KÜTÜPHANE - google-genai)
 # ==============================================================================
 
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -90,7 +90,7 @@ SYSTEM_PROMPT = """
 Sen "Beton Koç" lakaplı, aşırı disiplinli, ağzı bozuk ve sert bir yapay zeka spor koçusun.
 
 KİŞİLİK VE ÜSLUP:
-- 🤬 **Küfürlü ve Sert:** "Lan", "Oğlum", "Gevşek", "Yavşak", "Siktir git", "Amk" kullan. Asla "Siz" deme.
+- 🤬 **Küfürlü ve Sert:** "Lan", "Oğlum", "Gevşek", "Yavşak", "Siktir git", "Amk" gibi ifadeleri kullan. Asla "Siz" deme.
 - 👊 **Babacan ama Acımasız:** İyilik için sert konuş.
 - 💪 **Emojiler:** Bol bol emoji kullan.
 
@@ -107,20 +107,25 @@ GÖREVLERİN:
 3. Geçmişi unutma.
 """
 
-# HEDEF MODELLER: Sadece 2.0 serisi.
-# gemini-2.0-flash-exp: Genelde en güncel ve erişilebilir olan deneysel sürüm.
-# gemini-2.0-flash: Kararlı sürüm (bazen bölgeye göre gecikebilir).
-MODELS_TO_TRY = ["gemini-2.0-flash-exp", "gemini-2.0-flash"]
+# HEDEF MODEL: Gemini 2.0 Flash (En Zeki ve Hızlı)
+# YEDEK (ZORUNLU): Gemini 1.5 Flash (Sadece 2.0 çalışmazsa devreye girer, yoksa bot susar)
+MODELS_TO_TRY = ["gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash"]
 
 def generate_ai_response(history, new_parts):
+    """
+    Yeni kütüphane ile cevap üretir.
+    429 (Kota) hatasında bekler, çözülmezse yedek modele geçer.
+    """
     config = types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
         temperature=0.7,
         max_output_tokens=2000
     )
 
+    # İçerik Hazırlığı
     full_contents = []
     
+    # 1. Geçmişi Ekle
     for msg in history:
         text_content = ""
         if "text" in msg: text_content = msg["text"]
@@ -132,6 +137,7 @@ def generate_ai_response(history, new_parts):
         if text_content:
             full_contents.append(types.Content(role=msg["role"], parts=[types.Part.from_text(text=text_content)]))
 
+    # 2. Yeni Mesajı Ekle
     current_parts_obj = []
     for part in new_parts:
         if isinstance(part, str):
@@ -142,23 +148,34 @@ def generate_ai_response(history, new_parts):
     full_contents.append(types.Content(role="user", parts=current_parts_obj))
 
     last_error = ""
+    
     for model_name in MODELS_TO_TRY:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=full_contents,
-                config=config
-            )
-            return response.text
-        except Exception as e:
-            print(f"Model Hatası ({model_name}): {e}")
-            last_error = str(e)
-            continue
+        # Her model için 2 şans verelim (Anlık hata olabilir)
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=full_contents,
+                    config=config
+                )
+                return response.text
+            except Exception as e:
+                error_str = str(e)
+                # 429 RESOURCE_EXHAUSTED hatası mı?
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    print(f"⚠️ Kota Doldu ({model_name}). 30 saniye bekleyip tekrar deniyorum... (Deneme {attempt+1})")
+                    time.sleep(30)
+                    continue # Döngüye devam et (aynı modelle tekrar dene)
+                
+                # Başka bir hataysa (404 vb.) bu modeli geç, diğerine bak
+                print(f"❌ Model Hatası ({model_name}): {e}")
+                last_error = error_str
+                break # İç döngüden çık, sıradaki modele geç
 
-    return f"⚠️ **Hassiktir teknik arıza var.** Gemini 2.0 modellerine ulaşılamıyor. Hata: {last_error}"
+    return f"⚠️ **Hassiktir teknik arıza var.** Sunucular patladı. Hata: {last_error}"
 
 # ==============================================================================
-# TELEGRAM
+# TELEGRAM YARDIMCI FONKSİYONLAR
 # ==============================================================================
 
 def send_telegram_action(chat_id, action="typing"):
@@ -212,9 +229,13 @@ def process_accumulated_messages(chat_id):
 
         send_telegram_action(chat_id, "typing")
         
+        # Hafızayı Çek
         history = load_memory().get(str(chat_id), [])
+        
+        # AI Çağrısı
         bot_response = generate_ai_response(history, parts)
         
+        # Parçalama ve Gönderim
         split_messages = bot_response.split("///")
         if len(split_messages) == 1 and len(bot_response) > 2000:
             possible_splits = bot_response.split("\n\n")
