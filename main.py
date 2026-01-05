@@ -107,14 +107,13 @@ GÖREVLERİN:
 3. Geçmişi unutma.
 """
 
-# HEDEF MODEL: Gemini 2.0 Flash (En Zeki ve Hızlı)
-# YEDEK (ZORUNLU): Gemini 1.5 Flash (Sadece 2.0 çalışmazsa devreye girer, yoksa bot susar)
-MODELS_TO_TRY = ["gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash"]
+# HEDEF MODEL: Sadece Gemini 2.5 Flash
+MODELS_TO_TRY = ["gemini-2.5-flash"]
 
 def generate_ai_response(history, new_parts):
     """
     Yeni kütüphane ile cevap üretir.
-    429 (Kota) hatasında bekler, çözülmezse yedek modele geçer.
+    429 (Kota) hatasında bekler, olmazsa 'yeter amk' der.
     """
     config = types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
@@ -165,12 +164,16 @@ def generate_ai_response(history, new_parts):
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                     print(f"⚠️ Kota Doldu ({model_name}). 30 saniye bekleyip tekrar deniyorum... (Deneme {attempt+1})")
                     time.sleep(30)
-                    continue # Döngüye devam et (aynı modelle tekrar dene)
+                    last_error = "QUOTA_EXCEEDED"
+                    continue # Döngüye devam et
                 
-                # Başka bir hataysa (404 vb.) bu modeli geç, diğerine bak
                 print(f"❌ Model Hatası ({model_name}): {e}")
                 last_error = error_str
-                break # İç döngüden çık, sıradaki modele geç
+                break # İç döngüden çık
+
+    # Eğer hata KOTA kaynaklıysa o özel mesajı ver
+    if last_error == "QUOTA_EXCEEDED" or "429" in last_error or "RESOURCE_EXHAUSTED" in last_error:
+        return "💤 **Lan yeter amk, bugünlük pilim bitti.** Çok kafa ütüledin, Siktir git yat, yarın devam ederiz."
 
     return f"⚠️ **Hassiktir teknik arıza var.** Sunucular patladı. Hata: {last_error}"
 
@@ -249,7 +252,8 @@ def process_accumulated_messages(chat_id):
                 time.sleep(typing_duration)
                 send_telegram_message(chat_id, msg_part)
         
-        if "Hassiktir" not in bot_response:
+        # Eğer hata mesajı DEĞİLSE hafızaya kaydet
+        if "Hassiktir" not in bot_response and "yeter amk" not in bot_response:
             full_clean = bot_response.replace("///", "\n\n")
             save_memory(chat_id, text_log, full_clean)
 
